@@ -132,19 +132,32 @@ def read_mask_chunk(masks: list[Path], chunk: Chunk) -> np.ndarray:
     return np.array(data)
 
 
-def read_covariances_chunk(maps: list[list[Path]], chunk: Chunk) -> np.ndarray:
+def masks_to_skips(masks: np.ndarray) -> list[bool]:
+    """
+    Converts the masks to skips. If the mask is all False, we skip the map.
+    """
+
+    return [not np.any(mask) for mask in masks]
+
+
+def read_covariances_chunk(
+    maps: list[list[Path]], chunk: Chunk, skip: list[bool]
+) -> np.ndarray:
     """
     Reads the covariances from the disk. Note that we only read the upper
     left triangle of the covariance matrix and repeat that for the lower right.
     """
 
-    data = np.empty(
-        (len(maps), len(maps), chunk[1][0] - chunk[0][0], chunk[1][1] - chunk[0][1]),
-        dtype=np.float32,
+    data = np.eye(len(maps), dtype=np.float32)[..., None, None] * np.ones(
+        (chunk[1][0] - chunk[0][0], chunk[1][1] - chunk[0][1]), dtype=np.float32
     )
 
     for i, map in enumerate(maps):
+        if skip[i]:
+            continue
         for j in range(i + 1):
+            if skip[j]:
+                continue
             with fits.open(map[j]) as hdul:
                 data[i, j] = hdul[0].data[
                     chunk[0][0] : chunk[1][0], chunk[0][1] : chunk[1][1]
@@ -202,7 +215,7 @@ def write_to_main_array(data: np.ndarray, chunk: Chunk, main_array: da.array):
     Writes the data to the main array.
     """
 
-    main_array[chunk[0][0] : chunk[1][0], chunk[0][1] : chunk[1][1]] = data
+    main_array[chunk[0][0] : chunk[1][0], chunk[0][1] : chunk[1][1]] = data.T
 
     return
 
@@ -229,7 +242,11 @@ def create_tasks_for_chunk(
 
     masks = client.submit(read_mask_chunk, coadder.masks, chunk)
 
-    covariances = client.submit(read_covariances_chunk, coadder.covariance_maps, chunk)
+    skips = client.submit(masks_to_skips, masks)
+
+    covariances = client.submit(
+        read_covariances_chunk, coadder.covariance_maps, chunk, skips
+    )
 
     coadded_map = client.submit(
         coadded_map_wrapper,
@@ -247,17 +264,22 @@ if __name__ == "__main__":
     client = Client()
 
     TEST_DATA_LOCATION = Path("/Users/borrow-adm/Globus/needlet_test/")
+    N_MAPS = 3
 
-    maps = [TEST_DATA_LOCATION / f"map{i}.fits" for i in range(1, 4)]
-    masks = [TEST_DATA_LOCATION / f"map1_mask.fits" for i in range(1, 4)]
-    responses = [1.0, 1.0, 1.0]
+    maps = [TEST_DATA_LOCATION / f"map{i%3+1}.fits" for i in range(0, N_MAPS)]
+    masks = [TEST_DATA_LOCATION / f"map{i%3+1}_mask.fits" for i in range(0, N_MAPS)]
+    responses = [1.0] * len(masks)
     covariance_maps = [
         [
             TEST_DATA_LOCATION
-            / (f"cov_map{i}_map{j}.fits" if i < j else f"cov_map{j}_map{i}.fits")
-            for j in range(1, 4)
+            / (
+                f"cov_map{i%3+1}_map{j%3+1}.fits"
+                if (i % 3 + 1) < (j % 3 + 1)
+                else f"cov_map{j%3+1}_map{i%3+1}.fits"
+            )
+            for j in range(0, N_MAPS)
         ]
-        for i in range(1, 4)
+        for i in range(0, N_MAPS)
     ]
 
     coadder = Coadder(
@@ -269,7 +291,8 @@ if __name__ == "__main__":
     main_array = np.zeros(coadder.chunk_meta()["meta"].shape, dtype=np.float32)
 
     results = [
-        create_tasks_for_chunk(chunk, client, coadder, main_array) for chunk in chunks
+        create_tasks_for_chunk(chunk, client, coadder, main_array)
+        for chunk in chunks
     ]
 
     for future in dask.distributed.as_completed(results):
