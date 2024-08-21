@@ -12,7 +12,6 @@ import dask.array as da
 import dask
 from dask.distributed import Client
 from astropy.io import fits
-import os,sys
 import argparse
 
 debug = False
@@ -195,9 +194,11 @@ def coadd_maps_pixels(
                 output[i, j] = 0.0
                 continue
 
-            if debug: print(covariance_maps[:, :, j, i])
+            if debug:
+                print(covariance_maps[:, :, j, i])
             cov = covariance_maps[:, :, j, i][:, mask][mask, :].reshape((n_out, n_out))
-            if debug: print(cov)
+            if debug:
+                print(cov)
             a = responses[mask]
 
             cinva = np.linalg.solve(cov, a)
@@ -268,12 +269,11 @@ def create_tasks_for_chunk(
 if __name__ == "__main__":
     client = Client()
 
-    parser = argparse.ArgumentParser(description='Test out parallelized coadder')
-    parser.add_argument("N", type=int,help='Number of maps')
-    parser.add_argument("path", type=str,help='Root path to maps')
-    parser.add_argument("--debug", action='store_true',help='Print out covariances.')
+    parser = argparse.ArgumentParser(description="Test out parallelized coadder")
+    parser.add_argument("N", type=int, help="Number of maps")
+    parser.add_argument("path", type=str, help="Root path to maps")
+    parser.add_argument("--debug", action="store_true", help="Print out covariances.")
     args = parser.parse_args()
-    
 
     TEST_DATA_LOCATION = Path(args.path)
     N_MAPS = args.N
@@ -304,8 +304,7 @@ if __name__ == "__main__":
     main_array = np.zeros(coadder.chunk_meta()["meta"].shape, dtype=np.float32)
 
     results = [
-        create_tasks_for_chunk(chunk, client, coadder, main_array)
-        for chunk in chunks
+        create_tasks_for_chunk(chunk, client, coadder, main_array) for chunk in chunks
     ]
 
     for future in dask.distributed.as_completed(results):
