@@ -178,8 +178,8 @@ def coadd_maps_pixels(
     Co-adds the maps in the pixel domain. Assumes all masks and maps are the same size.
     """
 
-    n_x, n_y = maps.shape[-2:]
-    output = np.zeros((n_x, n_y))
+    n_y, n_x = maps.shape[-2:]
+    output = np.zeros((n_y, n_x), dtype=np.float32)
 
     for i in range(n_x):
         for j in range(n_y):
@@ -189,7 +189,7 @@ def coadd_maps_pixels(
             n_out = masked_maps.size
 
             if n_out == 0:
-                output[i, j] = 0.0
+                output[j, i] = 0.0
                 continue
 
             cov = covariance_maps[:, :, j, i][:, mask][mask, :].reshape((n_out, n_out))
@@ -199,13 +199,13 @@ def coadd_maps_pixels(
             denom = np.dot(a, cinva)
 
             if denom == 0.0:
-                output[i, j] = 0.0
+                output[j, i] = 0.0
                 continue
 
             cinvd = np.linalg.solve(cov, masked_maps)
             numer = np.dot(a, cinvd)
 
-            output[i, j] = numer / denom
+            output[j, i] = numer / denom
 
     return output
 
@@ -215,7 +215,7 @@ def write_to_main_array(data: np.ndarray, chunk: Chunk, main_array: da.array):
     Writes the data to the main array.
     """
 
-    main_array[chunk[0][0] : chunk[1][0], chunk[0][1] : chunk[1][1]] = data.T
+    main_array[chunk[0][0] : chunk[1][0], chunk[0][1] : chunk[1][1]] = data
 
     return
 
@@ -291,8 +291,7 @@ if __name__ == "__main__":
     main_array = np.zeros(coadder.chunk_meta()["meta"].shape, dtype=np.float32)
 
     results = [
-        create_tasks_for_chunk(chunk, client, coadder, main_array)
-        for chunk in chunks
+        create_tasks_for_chunk(chunk, client, coadder, main_array) for chunk in chunks
     ]
 
     for future in dask.distributed.as_completed(results):
