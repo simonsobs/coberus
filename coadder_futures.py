@@ -12,7 +12,10 @@ import dask.array as da
 import dask
 from dask.distributed import Client
 from astropy.io import fits
+import os,sys
+import argparse
 
+debug = False
 Chunk = tuple[tuple[int], tuple[int]]
 
 
@@ -192,7 +195,9 @@ def coadd_maps_pixels(
                 output[i, j] = 0.0
                 continue
 
+            if debug: print(covariance_maps[:, :, j, i])
             cov = covariance_maps[:, :, j, i][:, mask][mask, :].reshape((n_out, n_out))
+            if debug: print(cov)
             a = responses[mask]
 
             cinva = np.linalg.solve(cov, a)
@@ -263,8 +268,16 @@ def create_tasks_for_chunk(
 if __name__ == "__main__":
     client = Client()
 
-    TEST_DATA_LOCATION = Path("/Users/borrow-adm/Globus/needlet_test/")
-    N_MAPS = 3
+    parser = argparse.ArgumentParser(description='Test out parallelized coadder')
+    parser.add_argument("N", type=int,help='Number of maps')
+    parser.add_argument("path", type=str,help='Root path to maps')
+    parser.add_argument("--debug", action='store_true',help='Print out covariances.')
+    args = parser.parse_args()
+    
+
+    TEST_DATA_LOCATION = Path(args.path)
+    N_MAPS = args.N
+    debug = args.debug
 
     maps = [TEST_DATA_LOCATION / f"map{i%3+1}.fits" for i in range(0, N_MAPS)]
     masks = [TEST_DATA_LOCATION / f"map{i%3+1}_mask.fits" for i in range(0, N_MAPS)]
