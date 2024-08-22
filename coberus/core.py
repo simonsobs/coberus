@@ -3,6 +3,7 @@ Coadder for maps. Uses linear algebra magic to add things, and dask
 to parallelise it all.
 """
 
+import dask.array
 from pydantic import BaseModel
 from pathlib import Path
 
@@ -266,42 +267,15 @@ def create_tasks_for_chunk(
     return coadded_map
 
 
-if __name__ == "__main__":
-    client = Client()
-
-    parser = argparse.ArgumentParser(description="Test out parallelized coadder")
-    parser.add_argument("N", type=int, help="Number of maps")
-    parser.add_argument("path", type=str, help="Root path to maps")
-    parser.add_argument("--debug", action="store_true", help="Print out covariances.")
-    args = parser.parse_args()
-
-    TEST_DATA_LOCATION = Path(args.path)
-    N_MAPS = args.N
-    debug = args.debug
-
-    maps = [TEST_DATA_LOCATION / f"map{i%3+1}.fits" for i in range(0, N_MAPS)]
-    masks = [TEST_DATA_LOCATION / f"map{i%3+1}_mask.fits" for i in range(0, N_MAPS)]
-    responses = [1.0] * len(masks)
-    covariance_maps = [
-        [
-            TEST_DATA_LOCATION
-            / (
-                f"cov_map{i%3+1}_map{j%3+1}.fits"
-                if (i % 3 + 1) < (j % 3 + 1)
-                else f"cov_map{j%3+1}_map{i%3+1}.fits"
-            )
-            for j in range(0, N_MAPS)
-        ]
-        for i in range(0, N_MAPS)
-    ]
-
-    coadder = Coadder(
-        maps=maps, masks=masks, responses=responses, covariance_maps=covariance_maps
-    )
-
+def coadd(client: Client, coadder: Coadder) -> da.Array:
+    """
+    The main function for co-adding maps. Takes your Coadder object, and
+    a Dask client, and returns a Dask array filled with your coadded map.
+    This function uses Dask futures to coadd your maps.
+    """
     chunks = coadder.chunk_task_list()
 
-    main_array = np.zeros(coadder.chunk_meta()["meta"].shape, dtype=np.float32)
+    main_array = da.zeros(coadder.chunk_meta()["meta"].shape, dtype=np.float32)
 
     results = [
         create_tasks_for_chunk(chunk, client, coadder, main_array) for chunk in chunks
@@ -312,4 +286,5 @@ if __name__ == "__main__":
 
         write_to_main_array(image, chunk, main_array)
 
-    np.save("output.npy", main_array)
+    return main_array
+
