@@ -1,12 +1,18 @@
 # Coberus
 
-A python library for co-adding maps.
+A python library for co-adding maps in parallel. Coberus works by splitting your
+map up into chunks (by default of 400x400 pixels). Each thread is handed one
+chunk, and it goes to read the constituent chunks of the underlying maps from
+disk. Co-addition then happens on a pxiel-by-pixel level, with the chunking used
+to reduce file access overhead.
 
 ### Setup
 
 You can install this repository using `uv` or `pip`.
 
-`{uv} pip install git+https://github.com/simonsobs/map-coaddition`
+```
+{uv} pip install git+https://github.com/simonsobs/map-coaddition
+```
 
 You can then use the library in your code as `coberus`.
 
