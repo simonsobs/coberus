@@ -70,4 +70,8 @@ arr = result.compute()
 There are utility functions in `coberus.fits` to write the dask array to file.
 
 
+#### Naming
 
+The name `coberus` is a play on `coadder`. 'Adders' are a common species of
+[snake in Europe](https://en.wikipedia.org/wiki/Adder), and have the species
+designation of _Vipera berus_.
