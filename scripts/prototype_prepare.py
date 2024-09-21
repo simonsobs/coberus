@@ -14,7 +14,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Make a mask.')
 parser.add_argument("outname", type=str,help='Name of outputs. Could include a path.')
 # parser.add_argument("--rms-threshold",     type=float,  default=70.0,help="RMS threshold in uK-arcmin for ivar maps.")
-parser.add_argument("--dfact",     type=int,  default=4,help="Downgrade factor.")
+parser.add_argument("--dfact",     type=int,  default=1,help="Downgrade factor.")
 # parser.add_argument("--width-deg",     type=float,  default=0.2,help="Width in deg. to grow mask by.")
 parser.add_argument("--nworkers",     type=int,  default=None,help="Maximum number of workers to parallelize over. Defaults to number of jobs.")
 # parser.add_argument("--template-fname",     type=str,  default=None,help="Path to template ACT/SO map.",required=True)
