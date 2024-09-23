@@ -4,30 +4,35 @@ import utils
 import os,sys
 from orphics import io,maps
 from coberus import Coadder, coadd
+from coberus import pipeline
 from dask.distributed import Client
 
 """
 
 To do
-- Exclude arrays depending on wavelet scale
 - Covariance smoothing factors
 - Data model
 - Beam-bandpass factors in responses
 
 Properties of a tag:
-- scales to skip
+- lmin and lmax
 - beam
+- bandpass / central freq
 
 
 """
 
+# Quick plots
+def plot(imap,tag,ind,mtype='map',**kwargs):
+    io.hplot(imap,f'{out_root}/wavelet_{mtype}_{tag}_scale_{ind}',mask=0,**kwargs)
 
 
 if __name__ == '__main__':
     out_root = utils.out_root
     outname = 'test'
     gal = '80'
-    lpeaks = [0.,100.,500.,800.,1000.,2000.,3000.,4000.]
+    lpeaks = [0.,100.,500.,800.,1000.,2000.,3000.,4000., 5000., 6000., 8000,10000.]
+    lmax = max(lpeaks)
     cutbox = [[4.-2,4.-9],[-4.-2,-4.-9]]
 
     # Load arrays
@@ -36,12 +41,9 @@ if __name__ == '__main__':
 
     base_tag = 'night_pa5_f090' # We will extract on to this geometry and use its mask for the final mask
     tags = [base_tag,'143','daydeep_pa5_f150']
+    lmins = [500,0,500]
+    lmaxs = [None,3000,None]
 
-    # Wavelet scales to skip for each tag
-    skips = []
-    skips.append([0,1])
-    skips.append([6,7])
-    skips.append([0,1])
     
     fwhm = [2.2,7.0,1.4]
 
@@ -65,20 +67,16 @@ if __name__ == '__main__':
     # Initialize Wavelets
     uht  = uharm.UHT(shape, wcs)
     basis = wv.CosineNeedlet(lpeaks = lpeaks)
+    
+
+
+                
+    scales = pipeline.get_scales(basis,tags,lmins,lmaxs)
+    
     nwaves = basis.n
     wt = wv.WaveletTransform(uht, basis = basis)
 
-    # Quick plots
-    def plot(imap,tag,ind,mtype='map',**kwargs):
-        io.hplot(imap,f'{out_root}/wavelet_{mtype}_{tag}_scale_{ind}',mask=0,**kwargs)
 
-    # Function to smooth covariance maps with block downgrading and projection
-    # back to original geometry
-    def smooth(map,factor):
-        downed = enmap.downgrade(map, factor, inclusive=True,op=np.nanmean)
-        downed[np.isnan(downed)] = 0
-        omap = enmap.upgrade(downed,factor,inclusive=True,oshape=map.shape)
-        return omap
 
     # Helper for dictionaries
     def update(d,key,item):
@@ -99,12 +97,12 @@ if __name__ == '__main__':
         omap[mask==0] = 0
         print("Wavelet transform...")
         # Reconvolve to common beam
-        ells = np.arange(6000)
+        ells = np.arange(lmax)
         out_beam = maps.gauss_beam(ells, 1.6)
         in_beam = maps.gauss_beam(ells, fwhm[i])
         beam_ratio = out_beam / in_beam
-        wavecs = wt.map2wave(omap,fl=beam_ratio,skip_coeffs=skips[i])
-        plot(omap,tags[i],0,mtype='input_map',colorbar=True,downgrade=2,grid=True,ticks=10) # these are input maps
+        wavecs = wt.map2wave(omap,fl=beam_ratio,scales=scales[tags[i]],fill_value=np.nan)
+        plot(omap,tags[i],0,mtype='input_map',colorbar=True,grid=True,ticks=10) # these are input maps
         smap = omap.submap(np.asarray(cutbox)*u.degree)
         plot(smap,tags[i],0,mtype='submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
         
@@ -114,7 +112,7 @@ if __name__ == '__main__':
 
         # Loop through wavelet scales
         for j,wmap in enumerate(wavecs.maps):
-            if (j in skips[i]): continue
+            if (j not in scales[tags[i]]): continue
             #plot(wmap,tags[i],j) # these are wavelet coefficient maps
             print("Projecting mask and writing wavelet map...")
             # Project masks on to wavelet map geometries
@@ -137,7 +135,7 @@ if __name__ == '__main__':
         # Tags to be included in wavelet scale
         itags = []
         for i,tag in enumerate(tags):
-            if k in skips[i]: continue
+            if k not in scales[tag]: continue
             itags.append(tag)
 
         for i in range(len(itags)):
@@ -146,7 +144,7 @@ if __name__ == '__main__':
                 wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}.fits')
                 wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}.fits')
 
-                cov = smooth(wmap1*wmap2,8) # this factor needs to be adjusted
+                cov = maps.block_smooth(wmap1*wmap2,8) # this factor needs to be adjusted
                 if (k<2 or k>4)  and ('night' in itags[i]):
                     plot(cov,f'{itags[i]}_{itags[j]}',k,mtype='cov')
                 fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits'
@@ -188,6 +186,7 @@ if __name__ == '__main__':
     coadd_map = wt.wave2map(owave)
     coadd_map[base_mask==0] = 0
     print(coadd_map.shape, coadd_map.wcs)
-    plot(coadd_map,"all",0,mtype='coadd',colorbar=True,downgrade=2,grid=True,ticks=10)
+    plot(coadd_map,"all",0,mtype='coadd',colorbar=True,grid=True,ticks=10)
     smap = coadd_map.submap(np.asarray(cutbox)*u.degree)
     plot(smap,"all",0,mtype='coadd_submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
+    enmap.write_map(f'{out_root}/{outname}_coadd_map.fits',coadd_map)
