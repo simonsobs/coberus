@@ -45,9 +45,65 @@ def update(d,key,item):
     d[key].append(item)
 
 
-def coadd_tags(map_fname_func, mask_fname_func, tags, base_tag,
+def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
           lpeaks, lmins, lmaxs, response_func, beam_func,
           out_beam_fwhm, out_root):
+
+    """
+    Generic function for coadding maps using an empirical
+    covariance determined from smoothed products of maps in a
+    needlet basis. Each input map is identified
+    by a string called 'tag'. The properties of these maps are specified
+    through functions of the tag name.
+
+    Parameters
+    ----------
+
+    map_fname_func : func
+        Accepts the tag name and returns a path to the input map
+
+    mask_fname_func : func
+        Accepts the tag name and returns a path to the mask
+
+    tags : list
+        Ordered list of tags to coadd
+
+    base_tag : str
+        Name of the tag whose geometry all other tags are extracted
+        to and whose mask is used as the final mask.
+
+    lpeaks : list
+        List of peak multipoles that define a cosine needlet basis
+
+    lmins : list
+        List of minimum multipoles beyond which a tag is not used
+        in a wavelet scale
+    
+    lmaxs : list
+        List of maximum multipoles beyond which a tag is not used
+        in a wavelet scale
+    
+    response_func : func
+        Accepts the tag name and returns the map response value.
+        Use lambda x: 1 for the CMB solution.
+
+    beam_func : func
+        Accepts the tag name and the multipole as arguments and
+        returns the value of the beam.
+
+    out_beam_fwhm : float
+        FWHM in arcminutes for the beam of the final map
+
+    out_root : str
+        Root path for outputs
+
+    Returns
+    -------
+
+    coadd_map : ndmap
+       The final coadded map.
+    
+    """
 
     lmax = max(lpeaks)
     cutbox = [[4.-2,4.-9],[-4.-2,-4.-9]]
