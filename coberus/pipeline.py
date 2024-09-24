@@ -6,10 +6,14 @@ from orphics import io,maps
 from coberus import Coadder, coadd
 from coberus import pipeline
 from dask.distributed import Client
+import time
 
 # Quick plots
 # def plot(imap,tag,ind,mtype='map',**kwargs):
 #     io.hplot(imap,f'{out_root}/wavelet_{mtype}_{tag}_scale_{ind}',mask=0,**kwargs)
+
+
+
 
 def get_scales(basis,tags,ellmins,ellmaxs):
     """
@@ -46,8 +50,9 @@ def update(d,key,item):
 
 
 def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
-          lpeaks, lmins, lmaxs, response_func, beam_func,
-          out_beam_fwhm, out_root):
+                  lpeaks, lmins, lmaxs, response_func, beam_func,
+                  out_beam_fwhm, out_root, cov_smooth_factor=16,
+                  map_postprocess_func=None, mask_postprocess_func=None, n_workers=None):
 
     """
     Generic function for coadding maps using an empirical
@@ -97,6 +102,15 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     out_root : str
         Root path for outputs
 
+    cov_smooth_factor : optional,int
+        Factor by which to block downgrade the covariance maps
+    
+    map_postprocess_func : optional,func
+        A function to apply to each loaded map
+    
+    mask_postprocess_func : optional,func
+        A function to apply to each loaded mask
+    
     Returns
     -------
 
@@ -104,7 +118,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
        The final coadded map.
     
     """
-
+    start_time = time.time()
     lmax = max(lpeaks)
     ells = np.arange(lmax)
     shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
@@ -125,7 +139,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     # Loop through arrays
     for i,tag in enumerate(tags):
         omap = enmap.read_map(map_fname_func(tag))
+        if map_postprocess_func is not None:
+            omap = map_postprocess_func(omap)
         mask = enmap.read_map(mask_fname_func(tag))
+        if mask_postprocess_func is not None:
+            mask = mask_postprocess_func(mask)
         if tag!=base_tag:
             omap = enmap.extract(omap,shape,wcs)
             mask = enmap.extract(mask,shape,wcs)
@@ -183,7 +201,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                 wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}.fits')
                 wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}.fits')
 
-                cov = maps.block_smooth(wmap1*wmap2,8) # this factor needs to be adjusted
+                cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor) # this factor needs to be adjusted
                 # if (k<2 or k>4)  and ('night' in itags[i]):
                 #     plot(cov,f'{itags[i]}_{itags[j]}',k,mtype='cov')
                 fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits'
@@ -209,8 +227,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             responses=responses
         )
 
-        # n_workers=int(os.environ['OMP_NUM_THREADS'])
-        with Client() as client:
+        with Client(n_workers=n_workers) as client:
             # Result is a dask array
             result = coadd(client, coadder)
             # This is now a numpy array
@@ -220,5 +237,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     print("wave2map")
     coadd_map = wt.wave2map(owave)
     coadd_map[base_mask==0] = 0
+    elapsed_time = time.time() - start_time
+    print(f"Done in {elapsed_time/60.:.2f} minutes.")
     return coadd_map
     
