@@ -43,7 +43,7 @@ if __name__ == '__main__':
     response_func = lambda tag: 1.0
     out_beam_fwhm = 1.6
 
-    coadd_map = pipeline.coadd_tags(map_fname_func, mask_fname_func, tags, base_tag,
+    coadd_map = pipeline.needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                    lpeaks, lmins, lmaxs, response_func, beam_func, out_beam_fwhm, out_root)
 
     print(coadd_map.shape, coadd_map.wcs)
