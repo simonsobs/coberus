@@ -106,8 +106,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     """
 
     lmax = max(lpeaks)
-    cutbox = [[4.-2,4.-9],[-4.-2,-4.-9]]
-
+    ells = np.arange(lmax)
     shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
 
     # Initialize Wavelets
@@ -136,13 +135,12 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         omap[mask==0] = 0
         print("Wavelet transform...")
         # Reconvolve to common beam
-        ells = np.arange(lmax)
         out_beam = maps.gauss_beam(ells, out_beam_fwhm)
         in_beam = beam_func(tag,ells)
         beam_ratio = out_beam / in_beam
         wavecs = wt.map2wave(omap,fl=beam_ratio,scales=scales[tags[i]],fill_value=np.nan)
         # plot(omap,tags[i],0,mtype='input_map',colorbar=True,grid=True,ticks=10) # these are input maps
-        smap = omap.submap(np.asarray(cutbox)*u.degree)
+        # smap = omap.submap(np.asarray(cutbox)*u.degree)
         # plot(smap,tags[i],0,mtype='submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
 
         if i==0:
