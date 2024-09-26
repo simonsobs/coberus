@@ -39,7 +39,7 @@ def parse_tags(t):
 
 def get_lpeaks(basis):
     if basis=='lensmode':
-        lpeaks = [0.,100.,500.,800.,1000.,2000.,3000.,4000.]
+        lpeaks = [0.,100.,500.,800.,1000.,2000.,3000.,4000., 5000., 6000.]
     elif basis=='szmode':
         lpeaks = np.append(np.append([0.,100.,500.,800.,1000.,2000.,3000.,4000.],np.arange(6000.,24000.,4000.)),[30000.])
     elif basis=='debug':

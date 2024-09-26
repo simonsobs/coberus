@@ -14,7 +14,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Make a mask.')
     parser.add_argument("out_name", type=str,help='Name of outputs. Could include a path.')
     parser.add_argument("--fwhm", type=float,default=1.6,help='Output FWHM.')
-    parser.add_argument("--cov-smooth-factor", type=int,default=16,help='Covariance smooth factor.')
+    parser.add_argument("--cov-smooth-factor", type=int,default=64,help='Covariance smooth factor.')
     parser.add_argument("--sim-index", type=int,default=0,help='Sim index.')
     parser.add_argument("--nworkers", type=int,default=None,help='Number of workers.')
     parser.add_argument("--basetag", type=str,default='night_pa5_f090',help='Base tag.')

@@ -48,7 +48,7 @@ def update(d,key,item):
 
 def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   lpeaks, lmins, lmaxs, response_func, beam_func,
-                  out_beam_fwhm, out_root, cov_smooth_factor=16,
+                  out_beam_fwhm, out_root, cov_smooth_factor=64,
                   map_postprocess_func=None, mask_postprocess_func=None, n_workers=None,
                   io_suffix='', delete_intermediate=False):
 
