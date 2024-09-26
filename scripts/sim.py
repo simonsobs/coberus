@@ -25,7 +25,7 @@ if __name__ == '__main__':
     tags = utils.parse_tags(args.tags)
     print(tags)
     out_root = utils.out_root
-    outname = args.out_name + f'_covsmooth_{args.cov_smooth_factor}'
+    outname = args.out_name
     simid = args.sim_index
 
     gal = '80'
@@ -64,8 +64,8 @@ if __name__ == '__main__':
         if c[tag]['exp']=='act':
             omap[ivar<=0] = 0
         enmap.write_map(map_fname_func(tag),omap)
-        if simid==0:
-            io.hplot(omap,f'{out_root}/sim_{simid}_{outname}_{tag}',downgrade=4,mask=0)
+        # if simid==0:
+        #     io.hplot(omap,f'{out_root}/sim_{simid}_{outname}_{tag}',downgrade=4,mask=0)
     
     lpeaks = utils.get_lpeaks(args.basis)
     response_func = lambda tag: 1.0
@@ -77,11 +77,11 @@ if __name__ == '__main__':
                                        lpeaks, lmins, lmaxs, response_func, beam_func,
                                        out_beam_fwhm, out_root,cov_smooth_factor=args.cov_smooth_factor,
                                        mask_postprocess_func=fmproc,
-                                       n_workers=args.nworkers,io_suffix=f'_simid_{simid}',
+                                       n_workers=args.nworkers,io_suffix=f'_simid_{simid}_covsmooth_{args.cov_smooth_factor}',
                                        delete_intermediate=True)
 
     
-    enmap.write_map(f'{out_root}/sim_{simid}_{outname}_coadd.fits',coadd_map)
+    enmap.write_map(f'{out_root}/sim_{simid}_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits',coadd_map)
 
     # Cleanup and delete files
     for tag in tags:
