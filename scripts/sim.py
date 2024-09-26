@@ -14,6 +14,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Make a mask.')
     parser.add_argument("out_name", type=str,help='Name of outputs. Could include a path.')
     parser.add_argument("--fwhm", type=float,default=1.6,help='Output FWHM.')
+    parser.add_argument("--cov-smooth-factor", type=int,default=16,help='Covariance smooth factor.')
     parser.add_argument("--sim-index", type=int,default=0,help='Sim index.')
     parser.add_argument("--nworkers", type=int,default=None,help='Number of workers.')
     parser.add_argument("--basetag", type=str,default='night_pa5_f090',help='Base tag.')
@@ -24,7 +25,7 @@ if __name__ == '__main__':
     tags = utils.parse_tags(args.tags)
     print(tags)
     out_root = utils.out_root
-    outname = args.out_name
+    outname = args.out_name + f'_covsmooth_{args.cov_smooth_factor}'
     simid = args.sim_index
 
     gal = '80'
@@ -73,7 +74,16 @@ if __name__ == '__main__':
     # cutbox = [[4.-2,4.-9],[-4.-2,-4.-9]]
 
     coadd_map = pipeline.needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
-                                       lpeaks, lmins, lmaxs, response_func, beam_func, out_beam_fwhm, out_root, mask_postprocess_func=fmproc,n_workers=args.nworkers)
+                                       lpeaks, lmins, lmaxs, response_func, beam_func,
+                                       out_beam_fwhm, out_root,cov_smooth_factor=args.cov_smooth_factor,
+                                       mask_postprocess_func=fmproc,
+                                       n_workers=args.nworkers,io_suffix=f'_simid_{simid}',
+                                       delete_intermediate=True)
 
     
     enmap.write_map(f'{out_root}/sim_{simid}_{outname}_coadd.fits',coadd_map)
+
+    # Cleanup and delete files
+    for tag in tags:
+        os.remove(map_fname_func(tag))
+    

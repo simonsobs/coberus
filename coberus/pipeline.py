@@ -49,7 +49,8 @@ def update(d,key,item):
 def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   lpeaks, lmins, lmaxs, response_func, beam_func,
                   out_beam_fwhm, out_root, cov_smooth_factor=16,
-                  map_postprocess_func=None, mask_postprocess_func=None, n_workers=None):
+                  map_postprocess_func=None, mask_postprocess_func=None, n_workers=None,
+                  io_suffix='', delete_intermediate=False):
 
     """
     Generic function for coadding maps using an empirical
@@ -108,6 +109,15 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     mask_postprocess_func : optional,func
         A function to apply to each loaded mask
     
+    n_workers : optional,int
+        Number of workers for distributed Dask tasks
+    
+    io_suffix : optional,str
+        Suffix for intermediate outputs (use a different one for each simulation)
+    
+    delete_intermediate : optional,bool
+        Whether to delete intermediate outputs
+    
     Returns
     -------
 
@@ -132,6 +142,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     fmasks = {}
     fmaps = {}
     fcovs = {}
+    filenames = []
 
     # Loop through arrays
     for i,tag in enumerate(tags):
@@ -171,11 +182,13 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             omask = enmap.project(mask,wmap.shape,wmap.wcs,order=0)
             # plot(omask,tags[i],j,mtype='mask',colorbar=True) # these are wavelet coefficient maps
 
-            mfname = f'{out_root}/wavelet_mask_{tags[i]}_scale_{j}.fits'
+            mfname = f'{out_root}/wavelet_mask_{tags[i]}_scale_{j}{io_suffix}.fits'
+            filenames.append(mfname)
             update(fmasks, j, mfname)
             enmap.write_map(mfname,omask)
 
-            wfname = f'{out_root}/wavelet_map_{tags[i]}_scale_{j}.fits'
+            wfname = f'{out_root}/wavelet_map_{tags[i]}_scale_{j}{io_suffix}.fits'
+            filenames.append(wfname)
             update(fmaps, j, wfname)
             # print("Map MB: ",wmap.nbytes/1024/1024.)
             enmap.write_map(wfname,wmap)
@@ -195,13 +208,14 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         for i in range(len(itags)):
             for j in range(i,len(itags)):
                 print("Smoothing..")
-                wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}.fits')
-                wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}.fits')
+                wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
+                wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits')
 
                 cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor) # this factor needs to be adjusted
                 # if (k<2 or k>4)  and ('night' in itags[i]):
                 #     plot(cov,f'{itags[i]}_{itags[j]}',k,mtype='cov')
-                fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits'
+                fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}{io_suffix}.fits'
+                filenames.append(fcovname)
                 fcovs[k][i][j] = fcovname
                 fcovs[k][j][i] = fcovname
                 enmap.write_map(fcovname,cov)
@@ -236,6 +250,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     coadd_map = wt.wave2map(owave)
     coadd_map[base_mask==0] = 0
     elapsed_time = time.time() - start_time
+
+    if delete_intermediate:
+        for filename in filenames:
+            os.remove(filename)
+    
     print(f"Done in {elapsed_time/60.:.2f} minutes.")
     return coadd_map
     
