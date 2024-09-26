@@ -17,18 +17,7 @@ parser.add_argument("--tags",     type=str,  default=None,help="Comma separated 
 parser.add_argument("--srcfull", action='store_true',help='Whether to use maps with sources in them.')
 args = parser.parse_args()
 
-if args.tags is None:
-    tags = utils.act_tags + utils.planck_tags
-    tags.remove('daywide_pa4_f220')
-    tags.remove('daywide_pa6_f090')
-    tags.remove('daywide_pa6_f150')
-    tags.remove('030')
-    tags.remove('044')
-    tags.remove('070')
-    tags.remove('545')
-else:
-    tags = args.tags.split(',')
-
+tags = utils.parse_tags(args.tags)
 out = os.path.join(utils.out_root,args.outname)
 
 def do_job(i):
@@ -56,7 +45,7 @@ def do_job(i):
 
     return None
 
-jobs = [(t,x) for t in tags for x in ['map','ivar','mask80']]
+jobs = [(t,x) for t in tags for x in ['map','ivar','mask80','mask70']]
 njobs = len(jobs)
 
 with futures.ProcessPoolExecutor(max_workers=args.nworkers) as executor:

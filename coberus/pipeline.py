@@ -8,9 +8,6 @@ from coberus import pipeline
 from dask.distributed import Client
 import time
 
-# Quick plots
-# def plot(imap,tag,ind,mtype='map',**kwargs):
-#     io.hplot(imap,f'{out_root}/wavelet_{mtype}_{tag}_scale_{ind}',mask=0,**kwargs)
 
 
 
@@ -228,6 +225,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         )
 
         with Client(n_workers=n_workers) as client:
+            print("Number of workers : ", len(client.scheduler_info()['workers']))
             # Result is a dask array
             result = coadd(client, coadder)
             # This is now a numpy array

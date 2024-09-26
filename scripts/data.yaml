@@ -1,0 +1,49 @@
+
+
+'100':
+  lmin: 0
+  lmax: 2000
+  beam: 9.69
+  sim_noise: 77.4
+  band: 100.
+
+'143':
+  lmin: 0
+  lmax: 2000
+  beam: 7.30
+  sim_noise: 33.0
+  band: 143.
+
+'217':
+  lmin: 0
+  lmax: 3000
+  beam: 5.02
+  sim_noise: 46.8
+  band: 217.
+
+'353':
+  lmin: 0
+  lmax: 3000
+  beam: 4.94
+  sim_noise: 153.6
+  band: 353.
+
+act_f090:
+  lmin: 600
+  lmax: None
+  beam: 2.2
+  band: 90.
+
+act_f150:
+  lmin: 600
+  lmax: None
+  beam: 1.4
+  band: 150.
+
+act_f220:
+  lmin: 600
+  lmax: None
+  beam: 1.0
+  band: 220.
+  
+  
