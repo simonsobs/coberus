@@ -28,23 +28,31 @@ if __name__ == '__main__':
     mask_fname_func = lambda tag: f'{out_root}/{outname}_{tag}_mask{gal}.fits'
     base_tag = args.basetag # We will extract on to this geometry and use its mask for the final mask
     mask = enmap.read_map(mask_fname_func(base_tag))
-    shape,wcs = mask.shape,mask.wcs
-    lmax = 4000
+    width_deg = 2.0
+    mask = maps.cosine_apodize(mask,width_deg)
+    shape,wcs = enmap.read_map_geometry(f'{out_root}/sim_0_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits')
+    lmax = 6000
     out_beam_fwhm = args.fwhm
 
     Nsims = 4
     bin_edges = np.arange(100,lmax,40)
     binner = stats.bin1D(bin_edges)
 
+    
     r = 0.
     for simid in range(Nsims):
         print(simid)
         alm = hp.read_alm(utils.cmb_sim_fname(simid),hdu=1)
-        alm = cs.almxfl(alm,lambda x: maps.gauss_beam(x,out_beam_fwhm))
+        alm = cs.almxfl(alm,lambda x: maps.gauss_beam(x,out_beam_fwhm)) # !!!
         imap = cs.alm2map(alm,enmap.empty(shape,wcs,dtype=np.float32))
-        imap[mask<=0] = 0
+        imap = imap * mask
         ialm = cs.map2alm(imap,lmax=lmax)
-        omap = enmap.read_map(f'{out_root}/sim_{simid}_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits')
+        omap = enmap.read_map(f'{out_root}/sim_{simid}_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits') * mask
+        # if simid==0:
+        #     io.hplot(omap,'omap',downgrade=8)
+        #     io.hplot(imap,'imap',downgrade=8)
+        #     io.hplot(omap-imap,'dmap',downgrade=8)
+        
         dalm = cs.map2alm(omap,lmax=lmax)
 
         xcls = cs.alm2cl(dalm,ialm)
@@ -61,4 +69,5 @@ if __name__ == '__main__':
     pl = io.Plotter('rCl')
     pl.add(cents,r,marker='o')
     pl.hline(y=0)
+    pl._ax.set_ylim(-0.01,0.01)
     pl.done('rcls.png')

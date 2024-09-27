@@ -34,13 +34,16 @@ if __name__ == '__main__':
     map_fname_func = lambda tag: f'{out_root}/{outname}_{tag}_sim_index_{simid}_map.fits'
 
     lmins,lmaxs,fwhms, c = utils.get_properties('data.yaml',tags)
-    beam_func = lambda tag, ells: maps.gauss_beam(ells, fwhms[tags.index(tag)])
+    #beam_func = lambda tag, ells: maps.gauss_beam(ells, fwhms[tags.index(tag)])
+    beam_func = lambda tag, ells: maps.gauss_beam(ells, 1.6) # !!!
     base_tag = args.basetag # We will extract on to this geometry and use its mask for the final mask
     shape,wcs = enmap.read_map_geometry(utils.get_filename(base_tag,maptype='map',splitnum=None,srcfree=True))
     shape = shape[-2:]
     dfact = 2
     shape,wcs = enmap.downgrade_geometry(shape, wcs, dfact) # TODO: improve; this doesnt simulate pixwin
-    
+
+    omaps = []
+    omasks = []
     
     # Make signal sim
     alm = hp.read_alm(utils.cmb_sim_fname(simid),hdu=1)
@@ -48,6 +51,8 @@ if __name__ == '__main__':
         print(tag)
         balm = cs.almxfl(alm,lambda ells: beam_func(tag,ells))
         imap = cs.alm2map(balm,enmap.empty(shape,wcs,dtype=np.float32))
+
+        
         if c[tag]['exp']=='act':
             ivar = enmap.read_map(utils.get_filename(tag,maptype='ivar',splitnum=None,srcfree=True))
             if ivar.ndim==3: ivar = ivar[0]
@@ -64,8 +69,6 @@ if __name__ == '__main__':
         if c[tag]['exp']=='act':
             omap[ivar<=0] = 0
         enmap.write_map(map_fname_func(tag),omap)
-        # if simid==0:
-        #     io.hplot(omap,f'{out_root}/sim_{simid}_{outname}_{tag}',downgrade=4,mask=0)
     
     lpeaks = utils.get_lpeaks(args.basis)
     response_func = lambda tag: 1.0

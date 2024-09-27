@@ -2,7 +2,7 @@ from pixell import enmap,curvedsky as cs, wavelets as wv,uharm,multimap,utils as
 import numpy as np
 import utils
 import os,sys
-from orphics import io,maps
+from orphics import io,maps,cosmology
 from coberus import Coadder, coadd
 from coberus import pipeline
 from dask.distributed import Client
@@ -50,7 +50,8 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   lpeaks, lmins, lmaxs, response_func, beam_func,
                   out_beam_fwhm, out_root, cov_smooth_factor=64,
                   map_postprocess_func=None, mask_postprocess_func=None, n_workers=None,
-                  io_suffix='', delete_intermediate=False):
+                  io_suffix='', delete_intermediate=False,
+                  imaps=None, masks=None):
 
     """
     Generic function for coadding maps using an empirical
@@ -128,7 +129,10 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     start_time = time.time()
     lmax = max(lpeaks)
     ells = np.arange(lmax)
-    shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
+    if imaps is None:
+        shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
+    else:
+        shape,wcs = imaps[0].shape, imaps[0].wcs
 
     # Initialize Wavelets
     uht  = uharm.UHT(shape, wcs)
@@ -146,10 +150,16 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
 
     # Loop through arrays
     for i,tag in enumerate(tags):
-        omap = enmap.read_map(map_fname_func(tag))
+        if imaps is None:
+            omap = enmap.read_map(map_fname_func(tag))
+        else:
+            omap = imaps[i].copy()
         if map_postprocess_func is not None:
             omap = map_postprocess_func(omap)
-        mask = enmap.read_map(mask_fname_func(tag))
+        if masks is None:
+            mask = enmap.read_map(mask_fname_func(tag))
+        else:
+            mask = masks[i].copy()
         if mask_postprocess_func is not None:
             mask = mask_postprocess_func(mask)
         if tag!=base_tag:
@@ -164,6 +174,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         out_beam = maps.gauss_beam(ells, out_beam_fwhm)
         in_beam = beam_func(tag,ells)
         beam_ratio = out_beam / in_beam
+        # beam_ratio = None # !!!
         wavecs = wt.map2wave(omap,fl=beam_ratio,scales=scales[tags[i]],fill_value=np.nan)
         # plot(omap,tags[i],0,mtype='input_map',colorbar=True,grid=True,ticks=10) # these are input maps
         # smap = omap.submap(np.asarray(cutbox)*u.degree)
@@ -193,6 +204,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             # print("Map MB: ",wmap.nbytes/1024/1024.)
             enmap.write_map(wfname,wmap)
 
+    ### !!!
+    theory = cosmology.default_theory()
+    ells = np.arange(lmax)
+    cls = theory.lCl('TT',ells)
+    ###
 
     print("Building covariance")
     included_tags = {}
@@ -208,12 +224,27 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         for i in range(len(itags)):
             for j in range(i,len(itags)):
                 print("Smoothing..")
-                wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
-                wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits')
 
-                cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor) # this factor needs to be adjusted
-                # if (k<2 or k>4)  and ('night' in itags[i]):
-                #     plot(cov,f'{itags[i]}_{itags[j]}',k,mtype='cov')
+                theory = False
+                if theory:
+                    gshape,gwcs = enmap.read_map_geometry(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
+                    ocls = cls.copy()
+                    ocls[ells<basis.lmins[k]] = 0
+                    ocls[ells>basis.lmaxs[k]] = 0
+                    cov = maps.field_variance(ocls) * enmap.ones(gshape,gwcs)
+                    if i==j:
+                        cov = cov + (20*np.pi/180./60.)**2.
+                    else:
+                        cov = cov * 0.
+                
+                else:
+                    wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
+                    wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits')
+
+                    cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor,slow=False) # this factor needs to be adjusted
+                    # if (k<2 or k>4)  and ('night' in itags[i]):
+                    #     io.hplot(cov,f'{out_root}/{itags[i]}_{itags[j]}_cov_{k}',downgrade=4)
+                    
                 fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}{io_suffix}.fits'
                 filenames.append(fcovname)
                 fcovs[k][i][j] = fcovname

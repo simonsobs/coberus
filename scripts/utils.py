@@ -43,7 +43,7 @@ def get_lpeaks(basis):
     elif basis=='szmode':
         lpeaks = np.append(np.append([0.,100.,500.,800.,1000.,2000.,3000.,4000.],np.arange(6000.,24000.,4000.)),[30000.])
     elif basis=='debug':
-        lpeaks = [0,100.,500.,1000.]
+        lpeaks = [800.,1000.,2000.,3000.,4000.]
     return lpeaks
 
 def get_properties(yaml_file,tags):

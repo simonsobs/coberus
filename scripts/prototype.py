@@ -14,6 +14,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Make a mask.')
     parser.add_argument("out_name", type=str,help='Name of outputs. Could include a path.')
     parser.add_argument("--fwhm", type=float,default=1.6,help='Output FWHM.')
+    parser.add_argument("--cov-smooth-factor", type=int,default=64,help='Covariance smooth factor.')
     parser.add_argument("--nworkers", type=int,default=None,help='Number of workers.')
     parser.add_argument("--basetag", type=str,default='night_pa5_f090',help='Base tag.')
     parser.add_argument("--basis", type=str,default='lensmode',help='Base tag.')
@@ -47,9 +48,13 @@ if __name__ == '__main__':
     out_beam_fwhm = args.fwhm
     
     # cutbox = [[4.-2,4.-9],[-4.-2,-4.-9]]
-
     coadd_map = pipeline.needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
-                                       lpeaks, lmins, lmaxs, response_func, beam_func, out_beam_fwhm, out_root, mask_postprocess_func=fmproc,n_workers=args.nworkers)
+                                       lpeaks, lmins, lmaxs, response_func, beam_func,
+                                       out_beam_fwhm, out_root,cov_smooth_factor=args.cov_smooth_factor,
+                                       mask_postprocess_func=fmproc,
+                                       n_workers=args.nworkers,io_suffix=f'_data_covsmooth_{args.cov_smooth_factor}',
+                                       delete_intermediate=True)
+
 
     print(coadd_map.shape, coadd_map.wcs)
     # plot(coadd_map,"all",0,mtype='coadd',colorbar=True,grid=True,ticks=10)
