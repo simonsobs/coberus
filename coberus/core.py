@@ -13,7 +13,6 @@ import dask.array as da
 import dask
 from dask.distributed import Client
 from astropy.io import fits
-import argparse
 
 debug = False
 Chunk = tuple[tuple[int], tuple[int]]
