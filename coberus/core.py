@@ -13,7 +13,6 @@ import dask.array as da
 import dask
 from dask.distributed import Client
 from astropy.io import fits
-import argparse
 
 debug = False
 Chunk = tuple[tuple[int], tuple[int]]
@@ -181,7 +180,7 @@ def coadd_maps_pixels(
     covariance_maps: np.ndarray,
     masks: np.ndarray,
     responses: np.ndarray,
-    deproj_responses: np.ndarray
+    deproj_responses: np.ndarray,
 ) -> np.ndarray:
     """
     Co-adds the maps in the pixel domain. Assumes all masks and maps are the same size.
@@ -193,9 +192,11 @@ def coadd_maps_pixels(
     n_deproj = len(deproj_responses)
     n_map = len(maps)
 
-    if n_deproj>0:
-        response_mat = np.append(responses, deproj_responses).reshape(n_deproj+1, n_map).T
-        det_q_sub_vec = np.zeros(n_deproj+1, dtype=np.float32)
+    if n_deproj > 0:
+        response_mat = (
+            np.append(responses, deproj_responses).reshape(n_deproj + 1, n_map).T
+        )
+        det_q_sub_vec = np.zeros(n_deproj + 1, dtype=np.float32)
 
     for i in range(n_x):
         for j in range(n_y):
@@ -215,7 +216,7 @@ def coadd_maps_pixels(
                 print(cov)
 
             # Standard ILC
-            if n_deproj==0:
+            if n_deproj == 0:
                 a = responses[mask]
 
                 cinva = np.linalg.solve(cov, a)
@@ -231,20 +232,24 @@ def coadd_maps_pixels(
                 output[j, i] = numer / denom
 
             # Constrained ILC (see Eq. 29 & 30 of 2307.01043)
-            else:   
+            else:
                 a_mix = response_mat[mask, :]
                 q_ab = np.dot(np.linalg.solve(cov, a_mix).T, a_mix)
                 det_q = np.linalg.det(q_ab)
 
-                for k in range(n_deproj+1):
-                    q_ab_excluding_a = np.concatenate((q_ab[:k, :], q_ab[k+1:, :]), axis=0)
-                    qsub = np.concatenate((q_ab_excluding_a[:, :0], q_ab_excluding_a[:, 1:]), axis=1)
-                    det_q_sub_vec[k] = (-1.0)**k*np.linalg.det(qsub)
+                for k in range(n_deproj + 1):
+                    q_ab_excluding_a = np.concatenate(
+                        (q_ab[:k, :], q_ab[k + 1 :, :]), axis=0
+                    )
+                    qsub = np.concatenate(
+                        (q_ab_excluding_a[:, :0], q_ab_excluding_a[:, 1:]), axis=1
+                    )
+                    det_q_sub_vec[k] = (-1.0) ** k * np.linalg.det(qsub)
 
                 # Compute weights
-                a_eff = (np.dot(det_q_sub_vec, a_mix.T)/det_q).astype(np.float32)
+                a_eff = (np.dot(det_q_sub_vec, a_mix.T) / det_q).astype(np.float32)
                 weights = np.linalg.solve(cov, a_eff)
-                output[j,i] = np.dot(weights, masked_maps)
+                output[j, i] = np.dot(weights, masked_maps)
 
     return output
 
@@ -272,7 +277,9 @@ def coadded_map_wrapper(
     the chunk to.
     """
 
-    return coadd_maps_pixels(maps, covariance_maps, masks, responses, deproj_responses), chunk
+    return coadd_maps_pixels(
+        maps, covariance_maps, masks, responses, deproj_responses
+    ), chunk
 
 
 def create_tasks_for_chunk(
@@ -321,4 +328,3 @@ def coadd(client: Client, coadder: Coadder) -> da.Array:
         write_to_main_array(image, chunk, main_array)
 
     return main_array
-

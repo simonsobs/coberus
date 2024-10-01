@@ -1,18 +1,15 @@
-from pixell import enmap,curvedsky as cs, wavelets as wv,uharm,multimap,utils as u
+from pixell import enmap, wavelets as wv, uharm
 import numpy as np
-#import utils
-import os,sys
-from orphics import io,maps,cosmology
+
+# import utils
+import os
+from orphics import maps, cosmology
 from coberus import Coadder, coadd
-from coberus import pipeline
 from dask.distributed import Client
 import time
 
 
-
-
-
-def get_scales(basis,tags,ellmins,ellmaxs):
+def get_scales(basis, tags, ellmins, ellmaxs):
     """
     Given a pixell.wavelets.basis wavelet basis
     object and minimum and maximum multipoles
@@ -23,22 +20,27 @@ def get_scales(basis,tags,ellmins,ellmaxs):
     """
     ntags = len(ellmins)
     scales = {}
-    if len(ellmaxs)!=ntags: raise ValueError
-    for tag,ellmin,ellmax in zip(tags,ellmins,ellmaxs):
+    if len(ellmaxs) != ntags:
+        raise ValueError
+    for tag, ellmin, ellmax in zip(tags, ellmins, ellmaxs):
         scales[tag] = []
         for i in range(basis.n):
             wlmin = basis.lmins[i]
             wlmax = basis.lmaxs[i]
-            if ellmin is None: ellmin = 0
-            if ellmax is None: ellmax = np.inf
-            if (ellmin>wlmin): continue
-            if (ellmax<wlmax): continue
+            if ellmin is None:
+                ellmin = 0
+            if ellmax is None:
+                ellmax = np.inf
+            if ellmin > wlmin:
+                continue
+            if ellmax < wlmax:
+                continue
             scales[tag].append(i)
     return scales
 
 
 # Helper for dictionaries
-def update(d,key,item):
+def update(d, key, item):
     try:
         d[key]
     except KeyError:
@@ -46,13 +48,28 @@ def update(d,key,item):
     d[key].append(item)
 
 
-def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
-                  lpeaks, lmins, lmaxs, response_func, beam_func,
-                  out_beam_fwhm, out_root, cov_smooth_factor=64,
-                  map_postprocess_func=None, mask_postprocess_func=None, n_workers=None,
-                  io_suffix='', delete_intermediate=False,
-                  imaps=None, masks=None, deproj_response_funcs=[]):
-
+def needlet_coadd(
+    map_fname_func,
+    mask_fname_func,
+    tags,
+    base_tag,
+    lpeaks,
+    lmins,
+    lmaxs,
+    response_func,
+    beam_func,
+    out_beam_fwhm,
+    out_root,
+    cov_smooth_factor=64,
+    map_postprocess_func=None,
+    mask_postprocess_func=None,
+    n_workers=None,
+    io_suffix="",
+    delete_intermediate=False,
+    imaps=None,
+    masks=None,
+    deproj_response_funcs=[],
+):
     """
     Generic function for coadding maps using an empirical
     covariance determined from smoothed products of maps in a
@@ -82,11 +99,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     lmins : list
         List of minimum multipoles beyond which a tag is not used
         in a wavelet scale
-    
+
     lmaxs : list
         List of maximum multipoles beyond which a tag is not used
         in a wavelet scale
-    
+
     response_func : func
         Accepts the tag name and returns the map response value.
         Use lambda x: 1 for the CMB solution.
@@ -103,47 +120,49 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
 
     cov_smooth_factor : optional,int
         Factor by which to block downgrade the covariance maps
-    
+
     map_postprocess_func : optional,func
         A function to apply to each loaded map
-    
+
     mask_postprocess_func : optional,func
         A function to apply to each loaded mask
-    
+
     n_workers : optional,int
         Number of workers for distributed Dask tasks
-    
+
     io_suffix : optional,str
         Suffix for intermediate outputs (use a different one for each simulation)
-    
+
     delete_intermediate : optional,bool
         Whether to delete intermediate outputs
 
     deproj_response_funcs: optional, list
         List of functions that accept the tag name and return the map response.
         These components will be deprojected using constrained ILC.
-    
+
     Returns
     -------
 
     coadd_map : ndmap
        The final coadded map.
-    
+
     """
     start_time = time.time()
     lmax = max(lpeaks)
     ells = np.arange(lmax)
     if imaps is None:
-        shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
+        shape, wcs = enmap.read_map_geometry(map_fname_func(base_tag))
     else:
-        shape,wcs = imaps[0].shape, imaps[0].wcs
+        shape, wcs = imaps[0].shape, imaps[0].wcs
 
     # Initialize Wavelets
-    uht  = uharm.UHT(shape, wcs, mode="curved") # Added mode because pixell wavelets only works on curved sky maps
-    basis = wv.CosineNeedlet(lpeaks = lpeaks)
-    scales = get_scales(basis,tags,lmins,lmaxs)
+    uht = uharm.UHT(
+        shape, wcs, mode="curved"
+    )  # Added mode because pixell wavelets only works on curved sky maps
+    basis = wv.CosineNeedlet(lpeaks=lpeaks)
+    scales = get_scales(basis, tags, lmins, lmaxs)
     nwaves = basis.n
-    wt = wv.WaveletTransform(uht, basis = basis)
+    wt = wv.WaveletTransform(uht, basis=basis)
 
     # These will hold file names for maps, masks and covariance maps
     # for use by the Coberus coadder
@@ -153,9 +172,13 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     filenames = []
 
     # Loop through arrays
-    for i,tag in enumerate(tags):
+    for i, tag in enumerate(tags):
         if imaps is None:
-            omap = enmap.read_map(map_fname_func(tag))[0] # Added a [0] here to read temperature component from multi-component map.
+            omap = enmap.read_map(
+                map_fname_func(tag)
+            )[
+                0
+            ]  # Added a [0] here to read temperature component from multi-component map.
         else:
             omap = imaps[i].copy()
         if map_postprocess_func is not None:
@@ -166,95 +189,106 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             mask = masks[i].copy()
         if mask_postprocess_func is not None:
             mask = mask_postprocess_func(mask)
-        if tag!=base_tag:
-            omap = enmap.extract(omap,shape,wcs)
-            mask = enmap.extract(mask,shape,wcs)
+        if tag != base_tag:
+            omap = enmap.extract(omap, shape, wcs)
+            mask = enmap.extract(mask, shape, wcs)
         else:
             base_mask = mask
 
-        omap[mask==0] = 0
+        omap[mask == 0] = 0
         print("Wavelet transform...")
         # Reconvolve to common beam
         out_beam = maps.gauss_beam(ells, out_beam_fwhm)
-        in_beam = beam_func(tag,ells)
+        in_beam = beam_func(tag, ells)
         beam_ratio = out_beam / in_beam
         # beam_ratio = None # !!!
-        wavecs = wt.map2wave(omap,fl=beam_ratio,scales=scales[tags[i]],fill_value=np.nan)
+        wavecs = wt.map2wave(
+            omap, fl=beam_ratio, scales=scales[tags[i]], fill_value=np.nan
+        )
         # plot(omap,tags[i],0,mtype='input_map',colorbar=True,grid=True,ticks=10) # these are input maps
         # smap = omap.submap(np.asarray(cutbox)*u.degree)
         # plot(smap,tags[i],0,mtype='submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
 
-        if i==0:
+        if i == 0:
             # Save multimap template for final coadded map
-            owave = wavecs*0.
+            owave = wavecs * 0.0
 
         # Loop through wavelet scales
-        for j,wmap in enumerate(wavecs.maps):
-            if (j not in scales[tags[i]]): continue
-            #plot(wmap,tags[i],j) # these are wavelet coefficient maps
+        for j, wmap in enumerate(wavecs.maps):
+            if j not in scales[tags[i]]:
+                continue
+            # plot(wmap,tags[i],j) # these are wavelet coefficient maps
             print("Projecting mask and writing wavelet map...")
             # Project masks on to wavelet map geometries
-            omask = enmap.project(mask,wmap.shape,wmap.wcs,order=0)
+            omask = enmap.project(mask, wmap.shape, wmap.wcs, order=0)
             # plot(omask,tags[i],j,mtype='mask',colorbar=True) # these are wavelet coefficient maps
 
-            mfname = f'{out_root}/wavelet_mask_{tags[i]}_scale_{j}{io_suffix}.fits'
+            mfname = f"{out_root}/wavelet_mask_{tags[i]}_scale_{j}{io_suffix}.fits"
             filenames.append(mfname)
             update(fmasks, j, mfname)
-            enmap.write_map(mfname,omask)
+            enmap.write_map(mfname, omask)
 
-            wfname = f'{out_root}/wavelet_map_{tags[i]}_scale_{j}{io_suffix}.fits'
+            wfname = f"{out_root}/wavelet_map_{tags[i]}_scale_{j}{io_suffix}.fits"
             filenames.append(wfname)
             update(fmaps, j, wfname)
             # print("Map MB: ",wmap.nbytes/1024/1024.)
-            enmap.write_map(wfname,wmap)
+            enmap.write_map(wfname, wmap)
 
     ### !!!
     theory = cosmology.default_theory()
     ells = np.arange(lmax)
-    cls = theory.lCl('TT',ells)
+    cls = theory.lCl("TT", ells)
     ###
 
     print("Building covariance")
     included_tags = {}
     for k in range(nwaves):
-        fcovs[k] = [[''] * len(fmaps[k]) for h in range(len(fmaps[k]))]
+        fcovs[k] = [[""] * len(fmaps[k]) for h in range(len(fmaps[k]))]
         # Tags to be included in wavelet scale
         itags = []
-        for i,tag in enumerate(tags):
-            if k not in scales[tag]: continue
+        for i, tag in enumerate(tags):
+            if k not in scales[tag]:
+                continue
             itags.append(tag)
         included_tags[k] = list(itags)
 
         for i in range(len(itags)):
-            for j in range(i,len(itags)):
+            for j in range(i, len(itags)):
                 print("Smoothing..")
 
                 theory = False
                 if theory:
-                    gshape,gwcs = enmap.read_map_geometry(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
+                    gshape, gwcs = enmap.read_map_geometry(
+                        f"{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits"
+                    )
                     ocls = cls.copy()
-                    ocls[ells<basis.lmins[k]] = 0
-                    ocls[ells>basis.lmaxs[k]] = 0
-                    cov = maps.field_variance(ocls) * enmap.ones(gshape,gwcs)
-                    if i==j:
-                        cov = cov + (20*np.pi/180./60.)**2.
+                    ocls[ells < basis.lmins[k]] = 0
+                    ocls[ells > basis.lmaxs[k]] = 0
+                    cov = maps.field_variance(ocls) * enmap.ones(gshape, gwcs)
+                    if i == j:
+                        cov = cov + (20 * np.pi / 180.0 / 60.0) ** 2.0
                     else:
-                        cov = cov * 0.
-                
-                else:
-                    wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
-                    wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits')
+                        cov = cov * 0.0
 
-                    cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor,slow=False) # this factor needs to be adjusted
+                else:
+                    wmap1 = enmap.read_map(
+                        f"{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits"
+                    )
+                    wmap2 = enmap.read_map(
+                        f"{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits"
+                    )
+
+                    cov = maps.block_smooth(
+                        wmap1 * wmap2, cov_smooth_factor, slow=False
+                    )  # this factor needs to be adjusted
                     # if (k<2 or k>4)  and ('night' in itags[i]):
                     #     io.hplot(cov,f'{out_root}/{itags[i]}_{itags[j]}_cov_{k}',downgrade=4)
-                    
-                fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}{io_suffix}.fits'
+
+                fcovname = f"{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}{io_suffix}.fits"
                 filenames.append(fcovname)
                 fcovs[k][i][j] = fcovname
                 fcovs[k][j][i] = fcovname
-                enmap.write_map(fcovname,cov)
-
+                enmap.write_map(fcovname, cov)
 
     # This part uses Coberus to do distributed Dask
     # pixel-space coadding of the maps for each
@@ -265,34 +299,35 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         masks = fmasks[j]
         covs = fcovs[j]
         responses = [response_func(tag) for tag in included_tags[j]]
-        deproj_responses = [[deproj_func_i(tag) for tag in included_tags[j]] 
-                            for deproj_func_i in deproj_response_funcs]
+        deproj_responses = [
+            [deproj_func_i(tag) for tag in included_tags[j]]
+            for deproj_func_i in deproj_response_funcs
+        ]
 
         coadder = Coadder(
             maps=lmaps,
             masks=masks,
             covariance_maps=covs,
             responses=responses,
-            deproj_responses=deproj_responses
+            deproj_responses=deproj_responses,
         )
 
         with Client(n_workers=n_workers) as client:
-            print("Number of workers : ", len(client.scheduler_info()['workers']))
+            print("Number of workers : ", len(client.scheduler_info()["workers"]))
             # Result is a dask array
             result = coadd(client, coadder)
             # This is now a numpy array
             arr = result.compute()
-            owave.maps[j] = enmap.enmap(arr.copy(),wcs)
+            owave.maps[j] = enmap.enmap(arr.copy(), wcs)
 
     print("wave2map")
     coadd_map = wt.wave2map(owave)
-    coadd_map[base_mask==0] = 0
+    coadd_map[base_mask == 0] = 0
     elapsed_time = time.time() - start_time
 
     if delete_intermediate:
         for filename in filenames:
             os.remove(filename)
-    
+
     print(f"Done in {elapsed_time/60.:.2f} minutes.")
     return coadd_map
-    
