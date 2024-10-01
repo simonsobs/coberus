@@ -1,6 +1,6 @@
 from pixell import enmap,curvedsky as cs, wavelets as wv,uharm,multimap,utils as u
 import numpy as np
-import utils
+#import utils
 import os,sys
 from orphics import io,maps,cosmology
 from coberus import Coadder, coadd
@@ -51,7 +51,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   out_beam_fwhm, out_root, cov_smooth_factor=64,
                   map_postprocess_func=None, mask_postprocess_func=None, n_workers=None,
                   io_suffix='', delete_intermediate=False,
-                  imaps=None, masks=None):
+                  imaps=None, masks=None, deproj_response_funcs=[]):
 
     """
     Generic function for coadding maps using an empirical
@@ -118,6 +118,10 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     
     delete_intermediate : optional,bool
         Whether to delete intermediate outputs
+
+    deproj_response_funcs: optional, list
+        List of functions that accept the tag name and return the map response.
+        These components will be deprojected using constrained ILC.
     
     Returns
     -------
@@ -135,7 +139,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         shape,wcs = imaps[0].shape, imaps[0].wcs
 
     # Initialize Wavelets
-    uht  = uharm.UHT(shape, wcs)
+    uht  = uharm.UHT(shape, wcs, mode="curved") # Added mode because pixell wavelets only works on curved sky maps
     basis = wv.CosineNeedlet(lpeaks = lpeaks)
     scales = get_scales(basis,tags,lmins,lmaxs)
     nwaves = basis.n
@@ -151,7 +155,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     # Loop through arrays
     for i,tag in enumerate(tags):
         if imaps is None:
-            omap = enmap.read_map(map_fname_func(tag))
+            omap = enmap.read_map(map_fname_func(tag))[0] # Added a [0] here to read temperature component from multi-component map.
         else:
             omap = imaps[i].copy()
         if map_postprocess_func is not None:
@@ -261,12 +265,15 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         masks = fmasks[j]
         covs = fcovs[j]
         responses = [response_func(tag) for tag in included_tags[j]]
+        deproj_responses = [[deproj_func_i(tag) for tag in included_tags[j]] 
+                            for deproj_func_i in deproj_response_funcs]
 
         coadder = Coadder(
             maps=lmaps,
             masks=masks,
             covariance_maps=covs,
-            responses=responses
+            responses=responses,
+            deproj_responses=deproj_responses
         )
 
         with Client(n_workers=n_workers) as client:
