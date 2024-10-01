@@ -3,7 +3,7 @@ Routines for wavelet transforms.
 """
 
 from typing import Any
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from pixell import uharm
 from pixell import wavelets
@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import math
 
+from typing import Callable
 from coberus.core import Coadder
 
 
@@ -36,9 +37,23 @@ class Map(BaseModel):
     # Response value. For CMB solutions, this is 1.0
     response: float
     # Beam function. For a given ell, return the beam value.
-    beam: callable[float, float]
-    # Scales for this map
-    scales: list[int]
+    beam: Callable[[float], float]
+
+    def scales(self, basis: wavelets.CosineNeedlet) -> list[int]:
+        """
+        Return the scales that are relevant for this map.
+        """
+
+        scales = []
+
+        for i in range(basis.n):
+            wlmin = basis.lmins[i]
+            wlmax = basis.lmaxs[i]
+
+            if (self.lmin <= wlmin) and (self.lmax >= wlmax):
+                scales.append(i)
+
+        return scales
 
 
 class WaveletMetadata(BaseModel):
@@ -46,7 +61,7 @@ class WaveletMetadata(BaseModel):
     Wavelet transform settings.
     """
 
-    shape: tuple[int]
+    shape: tuple[int, int]
     wcs: wcsutils.WCS
     basis: wavelets.CosineNeedlet
 
@@ -59,8 +74,10 @@ class WaveletMetadata(BaseModel):
     io_suffix: str | None = None
     output_root: Path
 
-    uht: uharm.UHT | None
+    uht: uharm.UHT | None = None
     wt: wavelets.WaveletTransform | None = None
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
     def nwaves(self) -> int:
@@ -78,28 +95,32 @@ class WaveletMetadata(BaseModel):
         return np.exp(prefactor * square_ells)
 
     def model_post_init(self, __context: Any) -> None:
-        self.wt = wavelets.WaveletTransform(self.uht, basis=self.basis)
         self.uht = uharm.UHT(self.shape, self.wcs)
+        self.wt = wavelets.WaveletTransform(self.uht, basis=self.basis)
         return super().model_post_init(__context)
-    
+
     @classmethod
-    def from_primary_map(cls, filename: Path, basis: wavelets.CosineNeedlet, output_beam_fwhm: float, output_root: Path, cov_smooth_factor: int = 1, ) -> "WaveletMetadata":
+    def from_primary_map(
+        cls,
+        filename: Path,
+        basis: wavelets.CosineNeedlet,
+        output_beam_fwhm: float,
+        output_root: Path,
+        cov_smooth_factor: int = 1,
+    ) -> "WaveletMetadata":
         """
         Create a WaveletMetadata object from a primary map.
         """
-        shape, wcs = enmap.read_map_geometry(filename)
+        shape, wcs = enmap.read_map_geometry(str(filename))
 
         return cls(
             shape=shape,
-            wcs=wcs, 
+            wcs=wcs,
             basis=basis,
             output_beam_fwhm=output_beam_fwhm,
             output_root=output_root,
             cov_smooth_factor=cov_smooth_factor,
         )
-
-
-
 
 
 def map_filename(metadata: WaveletMetadata, map: Map, scale: int) -> Path:
@@ -145,20 +166,21 @@ def apply_wavelet_transform(
     """
 
     # Load the map and mask
-    imap = enmap.read_map(map_info.path)
-    mask = enmap.read_map(map_info.mask)
+    imap = enmap.read_map(str(map_info.path))
+    mask = enmap.read_map(str(map_info.mask))
 
-    ells = np.arange(metadata.lmax)
+    ells = np.arange(map_info.lmax)
     beam_ratios = metadata.output_beam(ells) / map_info.beam(ells)
-    wavecs = wavelets.map2wave(
-        imap, fl=beam_ratios, scales=map_info.scales, fill_value=np.nan
+    scales = map_info.scales(metadata.basis)
+    wavecs = metadata.wt.map2wave(
+        imap, fl=beam_ratios, scales=scales, fill_value=np.nan
     )
 
     # Loop over all the wavelet scales.
     filenames = {}
 
     for i, wmap in enumerate(wavecs.maps):
-        if i not in map_info.scales:
+        if i not in scales:
             # Shouldn't this be unreachable state, given we provided this
             # to map2wave?
             continue
@@ -193,7 +215,7 @@ def create_covariance_map(
     )
     downed[np.isnan(downed)] = 0
     output_map = enmap.upgrade(
-        downed, metadata.cov_smooth_factor, inclusive=True, op=np.nanmean
+        downed, metadata.cov_smooth_factor, inclusive=True, oshape=covariance_map.shape
     )
 
     enmap.write_map(str(output_filename), output_map)
@@ -216,10 +238,12 @@ def create_covariance_maps(
     # Only need to do the upper quadrant and diagonal, since the covariance
     # matrix is symmetric.
 
-    covariance_maps = [[None] * len(maps) for _ in range(len(maps))]
+    filtered_maps = [map for map in maps if scale in map.scales(metadata.basis)]
 
-    for i, map_a in enumerate(maps):
-        for j, map_b in enumerate(maps):
+    covariance_maps = [[None] * len(filtered_maps) for _ in range(len(filtered_maps))]
+
+    for i, map_a in enumerate(filtered_maps):
+        for j, map_b in enumerate(filtered_maps):
             if i > j:
                 continue
 
@@ -256,9 +280,9 @@ def create_all_wavelet_maps(
         for scale, new_map_filenames in wavelet_maps.items():
             # TODO: This is not actually parallel as this is a synchronous operation.
             # You'll need to come back and do the dictionary updates afterwards.
-            all_wavelet_maps[scale] = all_wavelet_maps.get(scale, []).append(
+            all_wavelet_maps[scale] = all_wavelet_maps.get(scale, []) + [
                 new_map_filenames
-            )
+            ]
 
     return all_wavelet_maps
 
@@ -297,7 +321,7 @@ def wavelet_prepare(
 
     # Create Coadder objects for each scale
     coadders = []
-    
+
     for scale, covariance_maps in all_covariance_maps.items():
         map_filenames, mask_filenames = list(zip(*all_wavelet_maps[scale]))
         responses = [map_info.response for map_info in maps]
@@ -310,15 +334,42 @@ def wavelet_prepare(
         )
 
         coadders.append(coadder)
-    
+
     return coadders
 
 
 if __name__ == "__main__":
     # Simple test...
 
-    
-
     metadata = WaveletMetadata.from_primary_map(
-
+        Path("example/map1.fits"),
+        basis=wavelets.CosineNeedlet([800.0, 1000.0, 2000.0, 3000.0, 4000.0]),
+        output_beam_fwhm=1.6,
+        output_root=Path("example/wavelet"),
+        cov_smooth_factor=64,
     )
+
+    maps = [
+        Map(
+            tag="map1",
+            path=Path("example/map1.fits"),
+            mask=Path("example/map1_mask.fits"),
+            lmin=0,
+            lmax=3000,
+            response=1.0,
+            beam=lambda ell: 1.0,
+        ),
+        Map(
+            tag="map2",
+            path=Path("example/map2.fits"),
+            mask=Path("example/map2_mask.fits"),
+            lmin=0,
+            lmax=3000,
+            response=1.0,
+            beam=lambda ell: 1.0,
+        ),
+    ]
+
+    coadders = wavelet_prepare(metadata, maps)
+
+    print(coadders)
