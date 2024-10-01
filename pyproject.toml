@@ -14,7 +14,7 @@ dependencies = [
     "numpy",
     "astropy",
     "dask[complete]",
-    "pixell"
+    "pixell>=0.26.2"
 ]
 authors = [
     {name = "Josh Borrow"},
