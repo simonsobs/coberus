@@ -96,6 +96,27 @@ class Coadder(BaseModel):
                 )
 
         return chunks
+    
+    def cleanup(self):
+        """
+        Cleans up all files associated with the Coadder (i.e.
+        deletes them from disk!)
+        """
+
+        # Generate a list of all files to delete.
+        files: set[Path] = set()
+
+        files.update(*self.maps)
+        files.update(*self.masks)
+
+        for cov in self.covariance_maps:
+            files.update(*cov)
+
+        # Delete all files.
+        for file in files:
+            file.unlink()
+        
+        return
 
 
 def read_maps_chunk(maps: list[Path], chunk: Chunk) -> np.ndarray:
