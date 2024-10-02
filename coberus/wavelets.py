@@ -11,6 +11,7 @@ from pixell import wcsutils
 from pixell import enmap
 
 from pathlib import Path
+from dask.distributed import Client, as_completed, get_client
 import numpy as np
 import math
 
@@ -227,20 +228,21 @@ def create_covariance_maps(
     metadata: WaveletMetadata,
     maps: list[Map],
     scale: int,
-) -> list[list[Path]]:
+) -> tuple[list[list[Path]], list[Path]]:
     """
-    Creates all covariance maps for a given scale.
+    Creates all covariance maps for a given scale. Must be ran in a dask
+    task as it uses get_client()
     """
-
-    # TODO: Write this as a parallel operation? Submit futures instead of
-    # waiting for each one to finish?
 
     # Only need to do the upper quadrant and diagonal, since the covariance
     # matrix is symmetric.
 
+    client = get_client()
+
     filtered_maps = [map for map in maps if scale in map.scales(metadata.basis)]
 
     covariance_maps = [[None] * len(filtered_maps) for _ in range(len(filtered_maps))]
+    futures = []
 
     for i, map_a in enumerate(filtered_maps):
         for j, map_b in enumerate(filtered_maps):
@@ -252,34 +254,42 @@ def create_covariance_maps(
             map_a_filename = map_filename(metadata, map_a, scale)
             map_b_filename = map_filename(metadata, map_b, scale)
 
-            # TODO: Submit this as a task to the dask client
-            _ = create_covariance_map(
-                metadata, map_a_filename, map_b_filename, output_filename
+            future = client.submit(
+                create_covariance_map,
+                metadata,
+                map_a_filename,
+                map_b_filename,
+                output_filename,
             )
+
+            futures.append(future)
 
             # Save the filenames in the arrays:
             covariance_maps[i][j] = output_filename
             covariance_maps[j][i] = output_filename
 
-    return covariance_maps
+    return covariance_maps, futures
 
 
 def create_all_wavelet_maps(
-    metadata: WaveletMetadata, maps: list[Map]
+    metadata: WaveletMetadata,
+    maps: list[Map],
+    client: Client,
 ) -> dict[int, tuple[Path, Path]]:
     """
-    Create all wavelet maps for all maps.
+    Create all wavelet maps for all maps. Blocks internally until
+    all maps are created.
     """
+
+    wavelet_map_futures = [
+        client.submit(apply_wavelet_transform, metadata, map_info) for map_info in maps
+    ]
 
     all_wavelet_maps = {}
 
-    for map_info in maps:
-        # TODO: Submit this as a task to the dask client
-        wavelet_maps = apply_wavelet_transform(metadata, map_info)
-
+    for future in as_completed(wavelet_map_futures):
+        wavelet_maps = future.result()
         for scale, new_map_filenames in wavelet_maps.items():
-            # TODO: This is not actually parallel as this is a synchronous operation.
-            # You'll need to come back and do the dictionary updates afterwards.
             all_wavelet_maps[scale] = all_wavelet_maps.get(scale, []) + [
                 new_map_filenames
             ]
@@ -291,13 +301,18 @@ def create_covariance_maps_all_scales(
     metadata: WaveletMetadata,
     maps: list[Map],
     scales: list[int],
+    client: Client,
 ) -> dict[int, list[list[Path]]]:
-    all_covariance_maps = {}
+    covariance_maps = [
+        client.submit(create_covariance_maps, metadata, maps, scale) for scale in scales
+    ]
 
-    for scale in scales:
-        covariance_maps = create_covariance_maps(metadata, maps, scale)
-
-        all_covariance_maps[scale] = covariance_maps
+    all_covariance_maps = {
+        scale: cov_maps
+        for scale, (_, (cov_maps, _)) in zip(
+            scales, as_completed(covariance_maps, with_results=True)
+        )
+    }
 
     return all_covariance_maps
 
@@ -305,6 +320,7 @@ def create_covariance_maps_all_scales(
 def wavelet_prepare(
     metadata: WaveletMetadata,
     maps: list[Map],
+    client: Client,
 ) -> list[Coadder]:
     """
     Prepares your input maps for a multi-scale coaddition by
@@ -312,11 +328,14 @@ def wavelet_prepare(
     """
 
     # Create all wavelet maps
-    all_wavelet_maps = create_all_wavelet_maps(metadata, maps)
+    all_wavelet_maps = create_all_wavelet_maps(metadata, maps, client)
 
     # Create all covariance maps
     all_covariance_maps = create_covariance_maps_all_scales(
-        metadata, maps, scales=list(all_wavelet_maps.keys())
+        metadata,
+        maps,
+        scales=list(all_wavelet_maps.keys()),
+        client=client,
     )
 
     # Create Coadder objects for each scale
@@ -340,6 +359,7 @@ def wavelet_prepare(
 
 if __name__ == "__main__":
     # Simple test...
+    from coberus.core import coadd
 
     metadata = WaveletMetadata.from_primary_map(
         Path("example/map1.fits"),
@@ -370,6 +390,12 @@ if __name__ == "__main__":
         ),
     ]
 
-    coadders = wavelet_prepare(metadata, maps)
+    client = Client()
+
+    coadders = wavelet_prepare(metadata, maps, client)
 
     print(coadders)
+
+    for coadder in coadders:
+        main_array = coadd(client, coadder)
+        main_array.compute()
