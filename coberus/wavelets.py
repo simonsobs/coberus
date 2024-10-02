@@ -12,6 +12,7 @@ from pixell import enmap
 
 from pathlib import Path
 from dask.distributed import Client, as_completed, get_client
+import dask.array as da
 import numpy as np
 import math
 
@@ -321,7 +322,7 @@ def wavelet_prepare(
     client: Client,
     metadata: WaveletMetadata,
     maps: list[Map],
-) -> list[Coadder]:
+) -> dict[int, Coadder]:
     """
     Prepares your input maps for a multi-scale coaddition by
     wavelet transforming them.
@@ -339,7 +340,7 @@ def wavelet_prepare(
     )
 
     # Create Coadder objects for each scale
-    coadders = []
+    coadders = {}
 
     for scale, covariance_maps in all_covariance_maps.items():
         map_filenames, mask_filenames = list(zip(*all_wavelet_maps[scale]))
@@ -352,9 +353,39 @@ def wavelet_prepare(
             responses=responses,
         )
 
-        coadders.append(coadder)
+        coadders[scale] = coadder
 
     return coadders
+
+
+def wavelet_to_map(
+    primary_map: Path,
+    primary_mask: Path,
+    metadata: WaveletMetadata,
+    coadd_results: dict[int, da.Array],
+) -> enmap:
+    """
+    Convert a set of coadded wavelet maps back to the pixel domain.
+    """
+
+    # We need to generate an empty wavelet transform.
+    primary = enmap.read_map(str(primary_map))
+
+    wavecs = (
+        metadata.wt.map2wave(primary, scales=coadd_results.keys(), fill_value=np.nan)
+        * 0.0
+    )
+
+    for scale, wavelet_map in coadd_results.items():
+        wavecs.maps[scale] = enmap.enmap(wavelet_map.compute(), metadata.wcs)
+
+    coadded_map = metadata.wt.wave2map(wavecs)
+
+    mask = enmap.read_map(str(primary_mask))
+
+    coadded_map[mask == 0] = 0.0
+
+    return coadded_map
 
 
 if __name__ == "__main__":
@@ -374,8 +405,8 @@ if __name__ == "__main__":
             tag="map1",
             path=Path("example/map1.fits"),
             mask=Path("example/map1_mask.fits"),
-            lmin=0,
-            lmax=3000,
+            lmin=1,
+            lmax=300,
             response=1.0,
             beam=lambda ell: 1.0,
         ),
@@ -383,8 +414,8 @@ if __name__ == "__main__":
             tag="map2",
             path=Path("example/map2.fits"),
             mask=Path("example/map2_mask.fits"),
-            lmin=0,
-            lmax=3000,
+            lmin=1,
+            lmax=300,
             response=1.0,
             beam=lambda ell: 1.0,
         ),
@@ -394,8 +425,19 @@ if __name__ == "__main__":
 
     coadders = wavelet_prepare(client, metadata, maps)
 
-    print(coadders)
+    result_maps = {s: coadd(client, coadder) for s, coadder in coadders.items()}
 
-    for coadder in coadders:
-        main_array = coadd(client, coadder)
-        main_array.compute()
+    coadded_map = wavelet_to_map(
+        Path("example/map1.fits"),
+        Path("example/map1_mask.fits"),
+        metadata,
+        result_maps,
+    )
+
+    enmap.write_map("example/coadded_map.fits", coadded_map)
+
+    # Clean up
+    for _, coadder in coadders:
+        coadder.cleanup()
+
+    client.close()
