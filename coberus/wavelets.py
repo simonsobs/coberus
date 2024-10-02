@@ -318,9 +318,9 @@ def create_covariance_maps_all_scales(
 
 
 def wavelet_prepare(
+    client: Client,
     metadata: WaveletMetadata,
     maps: list[Map],
-    client: Client,
 ) -> list[Coadder]:
     """
     Prepares your input maps for a multi-scale coaddition by
@@ -392,7 +392,7 @@ if __name__ == "__main__":
 
     client = Client()
 
-    coadders = wavelet_prepare(metadata, maps, client)
+    coadders = wavelet_prepare(client, metadata, maps)
 
     print(coadders)
 
