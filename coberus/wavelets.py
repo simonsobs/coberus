@@ -363,7 +363,7 @@ def wavelet_to_map(
     primary_mask: Path,
     metadata: WaveletMetadata,
     coadd_results: dict[int, da.Array],
-) -> enmap:
+) -> enmap.ndmap:
     """
     Convert a set of coadded wavelet maps back to the pixel domain.
     """
@@ -400,30 +400,43 @@ if __name__ == "__main__":
         cov_smooth_factor=64,
     )
 
+    def beam(ells: float) -> float:
+        """
+        Calculate the output beam for a given (array) of multipoles.
+        """
+        fwhm_radians = np.deg2rad(5.0 / 60.0)
+        square_ells = ells * ells
+
+        prefactor = -(fwhm_radians * fwhm_radians) / (16.0 * math.log(2))
+
+        return np.exp(prefactor * square_ells)
+
     maps = [
         Map(
             tag="map1",
             path=Path("example/map1.fits"),
             mask=Path("example/map1_mask.fits"),
-            lmin=1,
-            lmax=300,
+            lmin=0,
+            lmax=3000,
             response=1.0,
-            beam=lambda ell: 1.0,
+            beam=beam,
         ),
         Map(
             tag="map2",
             path=Path("example/map2.fits"),
             mask=Path("example/map2_mask.fits"),
-            lmin=1,
-            lmax=300,
+            lmin=0,
+            lmax=3000,
             response=1.0,
-            beam=lambda ell: 1.0,
+            beam=beam,
         ),
     ]
 
     client = Client()
 
     coadders = wavelet_prepare(client, metadata, maps)
+
+    print(coadders)
 
     result_maps = {s: coadd(client, coadder) for s, coadder in coadders.items()}
 
@@ -437,7 +450,7 @@ if __name__ == "__main__":
     enmap.write_map("example/coadded_map.fits", coadded_map)
 
     # Clean up
-    for _, coadder in coadders:
+    for _, coadder in coadders.items():
         coadder.cleanup()
 
     client.close()
