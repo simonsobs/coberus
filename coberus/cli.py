@@ -12,6 +12,7 @@ from .core import Coadder, coadd
 from .fits import save_to_fits, extract_wcs
 import json
 
+
 def main():
     parser = ap.ArgumentParser(
         description=(
@@ -23,9 +24,18 @@ def main():
         )
     )
 
-    parser.add_argument("--input", required=True, type=Path, help="Path to the directory containing input data.")
-    parser.add_argument("--number", required=True, type=int, help="Number of maps that you will use.")
-    parser.add_argument("--output", required=True, type=Path, help="Path to the output FITS file.")
+    parser.add_argument(
+        "--input",
+        required=True,
+        type=Path,
+        help="Path to the directory containing input data.",
+    )
+    parser.add_argument(
+        "--number", required=True, type=int, help="Number of maps that you will use."
+    )
+    parser.add_argument(
+        "--output", required=True, type=Path, help="Path to the output FITS file."
+    )
 
     args = parser.parse_args()
 
