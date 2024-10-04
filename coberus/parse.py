@@ -41,8 +41,8 @@ class MapMetadata(BaseModel):
     tag: str
     path: Path
     mask: Path
-    lmin: int
-    lmax: int
+    lmin: int | None = None
+    lmax: int | None = None
     response: float
 
     beam: BeamMetadata

@@ -33,9 +33,9 @@ class Map(BaseModel):
     # Path to the mask on disk
     mask: Path
     # Minium multipole to consider
-    lmin: int
+    lmin: int | None
     # Maximum multipole to consider
-    lmax: int
+    lmax: int | None
     # Response value. For CMB solutions, this is 1.0
     response: float
     # Beam function. For a given ell, return the beam value.
@@ -54,11 +54,14 @@ class Map(BaseModel):
 
         scales = []
 
+        lmin = self.lmin if self.lmin is not None else -1
+        lmax = self.lmax if self.lmax is not None else 10000000000
+
         for i in range(basis.n):
             wlmin = basis.lmins[i]
             wlmax = basis.lmaxs[i]
 
-            if (self.lmin <= wlmin) and (self.lmax >= wlmax):
+            if (lmin <= wlmin) and (lmax >= wlmax):
                 scales.append(i)
 
         return scales
@@ -191,7 +194,7 @@ def apply_wavelet_transform(
     imap = map_info.read_map()
     mask = map_info.read_mask()
 
-    ells = np.arange(map_info.lmax)
+    ells = np.arange(max(metadata.basis.lpeaks))
     beam_ratios = metadata.output_beam(ells) / map_info.beam(ells)
     scales = map_info.scales(metadata.basis)
     wavecs = metadata.wt.map2wave(
