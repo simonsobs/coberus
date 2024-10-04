@@ -182,7 +182,7 @@ def covariance_filename(
 
 def apply_wavelet_transform(
     metadata: WaveletMetadata, map_info: Map
-) -> dict[int, tuple[Path, Path]]:
+) -> dict[int, tuple[Path, Path, float]]:
     """
     Apply a wavelet transform to a map, and save out the data to files,
     one for each scale.
@@ -218,7 +218,7 @@ def apply_wavelet_transform(
         enmap.write_map(str(mask_name), omask)
         enmap.write_map(str(map_name), wmap)
 
-        filenames[i] = (map_name, mask_name)
+        filenames[i] = (map_name, mask_name, map_info.response)
 
     return filenames
 
@@ -292,7 +292,8 @@ def create_covariance_maps(
             covariance_maps[i][j] = output_filename
             covariance_maps[j][i] = output_filename
 
-    return covariance_maps, futures
+    # Return scale so we know which one it is when the future completes...
+    return covariance_maps, futures, scale
 
 
 def create_all_wavelet_maps(
@@ -333,9 +334,7 @@ def create_covariance_maps_all_scales(
 
     all_covariance_maps = {
         scale: cov_maps
-        for scale, (_, (cov_maps, _)) in zip(
-            scales, as_completed(covariance_maps, with_results=True)
-        )
+        for (_, (cov_maps, _, scale)) in as_completed(covariance_maps, with_results=True)
     }
 
     return all_covariance_maps
@@ -366,8 +365,7 @@ def wavelet_prepare(
     coadders = {}
 
     for scale, covariance_maps in all_covariance_maps.items():
-        map_filenames, mask_filenames = list(zip(*all_wavelet_maps[scale]))
-        responses = [map_info.response for map_info in maps]
+        map_filenames, mask_filenames, responses = list(zip(*all_wavelet_maps[scale]))
 
         coadder = Coadder(
             maps=map_filenames,

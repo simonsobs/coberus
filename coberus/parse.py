@@ -135,11 +135,11 @@ def main():
             primary_map=primary_map,
             primary_mask=primary_mask,
             metadata=wavelet_metadata,
-            result_maps=result_maps,
+            coadd_results=result_maps,
         )
 
         # Save the final map
-        coadded_map.save(input_data.output_map)
+        coadded_map.write(str(input_data.output_map))
 
     # Clean up intermediate files.
     for _, coadder in coadders.items():

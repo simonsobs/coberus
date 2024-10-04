@@ -106,11 +106,11 @@ class Coadder(BaseModel):
         # Generate a list of all files to delete.
         files: set[Path] = set()
 
-        files.update(*self.maps)
-        files.update(*self.masks)
+        files.update(self.maps)
+        files.update(self.masks)
 
         for cov in self.covariance_maps:
-            files.update(*cov)
+            files.update(cov)
 
         # Delete all files.
         for file in files:
@@ -215,11 +215,7 @@ def coadd_maps_pixels(
                 output[j, i] = 0.0
                 continue
 
-            if debug:
-                print(covariance_maps[:, :, j, i])
             cov = covariance_maps[:, :, j, i][:, mask][mask, :].reshape((n_out, n_out))
-            if debug:
-                print(cov)
             a = responses[mask]
 
             cinva = np.linalg.solve(cov, a)
@@ -293,6 +289,7 @@ def coadd(client: Client, coadder: Coadder) -> da.Array:
     a Dask client, and returns a Dask array filled with your coadded map.
     This function uses Dask futures to coadd your maps.
     """
+
     chunks = coadder.chunk_task_list()
 
     main_array = da.zeros(coadder.chunk_meta()["meta"].shape, dtype=np.float32)
