@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from pixell.wavelets import CosineNeedlet
 
-from wavelets import Map, WaveletMetadata
+from .wavelets import Map, WaveletMetadata
 from pathlib import Path
 import numpy as np
 import math
@@ -27,7 +27,7 @@ class BeamMetadata(BaseModel):
 
     def to_func(self):
         def beam(ells: float) -> float:
-            fwhm_radians = np.deg2rad(self.output_beam_fwhm / 60.0)
+            fwhm_radians = np.deg2rad(self.fwhm / 60.0)
             square_ells = ells * ells
 
             prefactor = -(fwhm_radians * fwhm_radians) / (16.0 * math.log(2))
@@ -58,8 +58,8 @@ class MapMetadata(BaseModel):
             lmax=self.lmax,
             response=self.response,
             beam=self.beam.to_func(),
-            postprocess_map=postprocess_funcs.get(self.postprocess_map, None),
-            postprocess_mask=postprocess_funcs.get(self.postprocess_mask, None),
+            postprocess_map=postprocess_funcs.get(self.postprocess_map, lambda x: x),
+            postprocess_mask=postprocess_funcs.get(self.postprocess_mask, lambda x: x),
         )
 
 
@@ -80,7 +80,7 @@ class CoberusInput(BaseModel):
     output_map: Path
 
     def to_wavelet_metadata(self) -> WaveletMetadata:
-        primary_map = [m for m in self.maps if m.tag == self.primary_map_tag][0]
+        primary_map = [m for m in self.map_metadata if m.tag == self.primary_map_tag][0]
 
         return WaveletMetadata.from_primary_map(
             filename=primary_map.path,
@@ -102,7 +102,7 @@ def main():
     from .wavelets import wavelet_prepare, wavelet_to_map
     from dask.distributed import Client
 
-    parser = ap.ARgumentParser(
+    parser = ap.ArgumentParser(
         description=(
             "Parse an input JSON/yml file and return a WaveletMetadata and associated Maps. "
             "This will then be coadded, creating a final map."

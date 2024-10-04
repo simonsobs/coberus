@@ -38,6 +38,7 @@ description="A library for co-adding astronomical maps with fixed pixelisation t
 
 [project.scripts]
 coberus = "coberus.cli:main"
+coberus-wavelet = "coberus.parse:main"
 
 [project.optional-dependencies]
 dev = [
