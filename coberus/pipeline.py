@@ -205,9 +205,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             enmap.write_map(wfname,wmap)
 
     ### !!!
-    theory = cosmology.default_theory()
     ells = np.arange(lmax)
-    cls = theory.lCl('TT',ells)
     ###
 
     print("Building covariance")
@@ -224,26 +222,12 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         for i in range(len(itags)):
             for j in range(i,len(itags)):
                 print("Smoothing..")
+                wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
+                wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits')
 
-                theory = False
-                if theory:
-                    gshape,gwcs = enmap.read_map_geometry(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
-                    ocls = cls.copy()
-                    ocls[ells<basis.lmins[k]] = 0
-                    ocls[ells>basis.lmaxs[k]] = 0
-                    cov = maps.field_variance(ocls) * enmap.ones(gshape,gwcs)
-                    if i==j:
-                        cov = cov + (20*np.pi/180./60.)**2.
-                    else:
-                        cov = cov * 0.
-                
-                else:
-                    wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
-                    wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits')
-
-                    cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor,slow=False) # this factor needs to be adjusted
-                    # if (k<2 or k>4)  and ('night' in itags[i]):
-                    #     io.hplot(cov,f'{out_root}/{itags[i]}_{itags[j]}_cov_{k}',downgrade=4)
+                cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor,slow=False) # this factor needs to be adjusted
+                # if (k<2 or k>4)  and ('night' in itags[i]):
+                #     io.hplot(cov,f'{out_root}/{itags[i]}_{itags[j]}_cov_{k}',downgrade=4)
                     
                 fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}{io_suffix}.fits'
                 filenames.append(fcovname)
@@ -268,6 +252,8 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             covariance_maps=covs,
             responses=responses
         )
+
+        print(coadder)
 
         with Client(n_workers=n_workers) as client:
             print("Number of workers : ", len(client.scheduler_info()['workers']))

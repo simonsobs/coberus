@@ -13,7 +13,7 @@ act_tags = [f'{t}_{x}' for x in  ['pa4_f220',
 
 planck_root = "/data5/planck/npipe_actpixels/fejer1_equ/"
 act_root = "/data5/act/maps/dr6v4_20230316/"
-out_root = "/data5/depot/needlets/proto/"
+out_root = "/data5/depot/needlets/oldproto/"
 mask_root = "/data5/act/masks/dr6v4_lensing_20240919_masks/baseline/"
 cmb_sim_fname = lambda simid: f"/data5/sims/v0.4/fullskyUnlensedCMB_alm_set00_{simid:05d}.fits"
 
