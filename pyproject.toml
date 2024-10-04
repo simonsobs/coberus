@@ -14,7 +14,8 @@ dependencies = [
     "numpy",
     "astropy",
     "dask[complete]",
-    "pixell>=0.26.2"
+    "pixell>=0.26.2",
+    "pydantic-yaml",
 ]
 authors = [
     {name = "Josh Borrow"},
