@@ -76,6 +76,54 @@ arr = result.compute()
 There are utility functions in `coberus.fits` to write the dask array to file.
 
 
+## End-to-End with Wavelets
+
+Coberus can also be ran in a mode where it automatically creates wavelet
+decompositions for you, and then co-adds on various scales, finally
+producing a single map. You can use the
+
+```
+coberus-wavelet config.json
+```
+
+tool for this. An example config.json is here:
+
+```json
+{
+  "map_metadata": [
+    {
+      "tag": "map_1",
+      "path": "map1.fits",
+      "mask": "map1_mask.fits",
+      "lmin": 0,
+      "lmax": 3000,
+      "response": 1.0,
+      "beam": {
+        "fwhm": 1.6
+      }
+    },
+    {
+      "tag": "map_2",
+      "path": "map2.fits",
+      "mask": "map2_mask.fits",
+      "lmin": 0,
+      "lmax": 3000,
+      "response": 1.0,
+      "beam": {
+        "fwhm": 1.6
+      }
+    }
+  ],
+  "primary_map_tag": "map_1",
+  "lpeaks": [0.0, 100.0, 500.0, 800.0, 1000.0, 2000.0, 3000.0, 4000.0,  5000.0,  6000.0],
+  "output_beam_fwhm": 1.6,
+  "cov_smooth_factor": 64,
+  "output_root": "wavelets",
+  "output_map": "coadded.fits"
+}
+```
+
+
 #### Naming
 
 The name `coberus` is a play on `coadder`. 'Adders' are a common species of
