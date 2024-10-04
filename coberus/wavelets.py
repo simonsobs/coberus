@@ -40,6 +40,12 @@ class Map(BaseModel):
     response: float
     # Beam function. For a given ell, return the beam value.
     beam: Callable[[float], float]
+    # Optional: a function to call on the loaded enmap when
+    # loading it.
+    postprocess_map: Callable[[enmap.ndmap], enmap.ndmap] = lambda x: x
+    # Optional: a function to call on the loaded mask when
+    # loading it.
+    postprocess_mask: Callable[[enmap.ndmap], enmap.ndmap] = lambda x: x
 
     def scales(self, basis: wavelets.CosineNeedlet) -> list[int]:
         """
@@ -56,6 +62,18 @@ class Map(BaseModel):
                 scales.append(i)
 
         return scales
+
+    def read_map(self) -> enmap.ndmap:
+        """
+        Read the map from disk.
+        """
+        return self.postprocess_map(enmap.read_map(str(self.path)))
+
+    def read_mask(self) -> enmap.ndmap:
+        """
+        Read the mask from disk.
+        """
+        return self.postprocess_mask(enmap.read_map(str(self.mask)))
 
 
 class WaveletMetadata(BaseModel):
@@ -109,6 +127,7 @@ class WaveletMetadata(BaseModel):
         output_beam_fwhm: float,
         output_root: Path,
         cov_smooth_factor: int = 1,
+        io_suffix: str | None = None,
     ) -> "WaveletMetadata":
         """
         Create a WaveletMetadata object from a primary map.
@@ -122,6 +141,7 @@ class WaveletMetadata(BaseModel):
             output_beam_fwhm=output_beam_fwhm,
             output_root=output_root,
             cov_smooth_factor=cov_smooth_factor,
+            io_suffix=io_suffix,
         )
 
 
@@ -168,8 +188,8 @@ def apply_wavelet_transform(
     """
 
     # Load the map and mask
-    imap = enmap.read_map(str(map_info.path))
-    mask = enmap.read_map(str(map_info.mask))
+    imap = map_info.read_map()
+    mask = map_info.read_mask()
 
     ells = np.arange(map_info.lmax)
     beam_ratios = metadata.output_beam(ells) / map_info.beam(ells)
