@@ -96,7 +96,7 @@ class Coadder(BaseModel):
                 )
 
         return chunks
-    
+
     def cleanup(self):
         """
         Cleans up all files associated with the Coadder (i.e.
@@ -115,7 +115,7 @@ class Coadder(BaseModel):
         # Delete all files.
         for file in files:
             file.unlink()
-        
+
         return
 
 
@@ -307,4 +307,3 @@ def coadd(client: Client, coadder: Coadder) -> da.Array:
         write_to_main_array(image, chunk, main_array)
 
     return main_array
-
