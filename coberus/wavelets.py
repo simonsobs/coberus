@@ -14,7 +14,7 @@ from pathlib import Path
 from dask.distributed import Client, as_completed, get_client
 import dask.array as da
 import numpy as np
-import math
+import math, time
 
 from typing import Callable
 from coberus.core import Coadder
@@ -177,7 +177,7 @@ def covariance_filename(
     core_name = f"{map_a.tag}_{map_b.tag}_scale_{scale}"
     core_name += ".fits" if metadata.io_suffix is None else f"{metadata.io_suffix}.fits"
 
-    return metadata.output_root / f"wavelet_cov_{core_name}"
+    return f'{metadata.output_root}_wavelet_cov_{core_name}'
 
 
 def apply_wavelet_transform(
@@ -197,9 +197,12 @@ def apply_wavelet_transform(
     ells = np.arange(max(metadata.basis.lpeaks))
     beam_ratios = metadata.output_beam(ells) / map_info.beam(ells)
     scales = map_info.scales(metadata.basis)
+    print("Wavelet transform...")
+    a = time.time()
     wavecs = metadata.wt.map2wave(
         imap, fl=beam_ratios, scales=scales, fill_value=np.nan
     )
+    print(f"Wavelet transform done in {time.time()-a:.2f} sec.")
 
     # Loop over all the wavelet scales.
     filenames = {}
@@ -234,7 +237,7 @@ def create_covariance_map(
     map_b = enmap.read_map(str(file_b))
 
     covariance_map = map_a * map_b
-
+    print("Cov smooth..")
     downed = enmap.downgrade(
         covariance_map, metadata.cov_smooth_factor, inclusive=True, op=np.nanmean
     )

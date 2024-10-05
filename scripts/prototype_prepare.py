@@ -41,6 +41,7 @@ def do_job(i):
     if imap.ndim!=2:
         print(imap.shape,tag,desc[1])
         raise ValueError
+    print(f"Writing {out}_{tag}_{desc[1]}.fits")
     enmap.write_map(f'{out}_{tag}_{desc[1]}.fits',post_op(utils.downgrade(imap,args.dfact,op=op)))
 
     return None

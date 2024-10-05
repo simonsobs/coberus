@@ -5,6 +5,7 @@ import os,sys
 from orphics import io,maps
 from coberus import coadd
 from coberus.wavelets import wavelet_prepare, wavelet_to_map
+from coberus.parse import CoberusInput
 from dask.distributed import Client
 
 import argparse
@@ -46,26 +47,28 @@ if __name__ == '__main__':
     response_func = lambda tag: 1.0
 
     data_dict = {}
+    data_dict['n_workers'] = args.nworkers
     data_dict['lpeaks'] = utils.get_lpeaks(args.basis)
     data_dict['output_beam_fwhm'] = args.fwhm
     data_dict['cov_smooth_factor'] = args.cov_smooth_factor
     data_dict['primary_map_tag'] = args.basetag # We will extract on to this geometry and use its mask for the final mask
     data_dict['output_root'] = f'{out_root}/{outname}_data_covsmooth_{args.cov_smooth_factor}'
     data_dict['output_map'] = f'{out_root}/{outname}_data_covsmooth_{args.cov_smooth_factor}_coadd_map.fits'
-    data_dict['map_metadata'] = {}
+    data_dict['map_metadata'] = []
     for i,tag in enumerate(tags):
-        data_dict['map_metadata'][tag] = {}
-        data_dict['map_metadata'][tag]['path'] = map_fname_func(tag)
-        data_dict['map_metadata'][tag]['mask'] = mask_fname_func(tag)
-        data_dict['map_metadata'][tag]['response'] = 1.0
-        data_dict['map_metadata'][tag]['lmin'] = lmins[i]
-        data_dict['map_metadata'][tag]['lmax'] = lmaxs[i]
-        data_dict['map_metadata'][tag]['beam'] = {'fwhm': fwhms[i]}
-        data_dict['map_metadata'][tag]['postprocess_mask'] = fmproc
+        d = {}
+        d['tag'] = tag
+        d['path'] = map_fname_func(tag)
+        d['mask'] = mask_fname_func(tag)
+        d['response'] = 1.0
+        d['lmin'] = lmins[i]
+        d['lmax'] = lmaxs[i]
+        d['beam'] = {'fwhm': fwhms[i]}
+        d['postprocess_mask'] = fmproc
+        data_dict['map_metadata'].append(dict(d))
 
 
-
-    input_data = CoberusInput.parse_obj(data_dict)
+    input_data = CoberusInput.model_validate(data_dict)
     wavelet_metadata = input_data.to_wavelet_metadata()
     maps = input_data.to_maps()
     primary_map = [m.path for m in maps if m.tag == input_data.primary_map_tag][0]

@@ -10,7 +10,7 @@ act_tags = [f'{t}_{x}' for x in  ['pa4_f220',
                              'pa6_f090',
                              'pa6_f150'] for t in ['night','daydeep','daywide']]
 
-paths = io.config_from_yaml('paths.yaml')
+paths = io.config_from_yaml('paths_local.yaml')
 
 planck_root = paths['planck_root']
 act_root = paths['act_root']
