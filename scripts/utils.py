@@ -10,12 +10,14 @@ act_tags = [f'{t}_{x}' for x in  ['pa4_f220',
                              'pa6_f090',
                              'pa6_f150'] for t in ['night','daydeep','daywide']]
 
+paths = io.config_from_yaml('paths_local.yaml')
 
-planck_root = "/data5/planck/npipe_actpixels/fejer1_equ/"
-act_root = "/data5/act/maps/dr6v4_20230316/"
-out_root = "/data5/depot/needlets/oldproto/"
-mask_root = "/data5/act/masks/dr6v4_lensing_20240919_masks/baseline/"
-cmb_sim_fname = lambda simid: f"/data5/sims/v0.4/fullskyUnlensedCMB_alm_set00_{simid:05d}.fits"
+planck_root = paths['planck_root']
+act_root = paths['act_root']
+out_root = paths['out_root']
+mask_root = paths['mask_root']
+sim_root = paths['sim_root']
+cmb_sim_fname = lambda simid: f"{sim_root}/fullskyLensedUnabberatedCMB_alm_set00_{simid:05d}.fits"
 
 planck_tags = ['030','044','070','100','143','217','353','545']
 
