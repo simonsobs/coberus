@@ -3,8 +3,9 @@ import numpy as np
 import utils
 import os,sys
 from orphics import io,maps
-from coberus import Coadder, coadd
-from coberus import pipeline
+from coberus import coadd
+from coberus.wavelets import wavelet_prepare, wavelet_to_map
+from dask.distributed import Client
 
 import argparse
 
@@ -46,18 +47,49 @@ if __name__ == '__main__':
     beam_func = lambda tag, ells: maps.gauss_beam(ells, fwhms[tags.index(tag)])
     response_func = lambda tag: 1.0
     out_beam_fwhm = args.fwhm
+
+
+
+
+    input_data = parse_yaml_raw_as(CoberusInput, data)
+    wavelet_metadata = input_data.to_wavelet_metadata()
+    maps = input_data.to_maps()
+    primary_map = [m.path for m in maps if m.tag == input_data.primary_map_tag][0]
+    primary_mask = [m.mask for m in maps if m.tag == input_data.primary_map_tag][0]
+
+    with Client(n_workers=input_data.n_workers) as client:
+        coadders = wavelet_prepare(client=client, metadata=wavelet_metadata, maps=maps)
+
+        result_maps = {
+            s: coadd(client=client, coadder=coadder) for s, coadder in coadders.items()
+        }
+
+        coadded_map = wavelet_to_map(
+            primary_map=primary_map,
+            primary_mask=primary_mask,
+            metadata=wavelet_metadata,
+            coadd_results=result_maps,
+        )
+
+        # Save the final map
+        coadded_map.write(str(input_data.output_map))
+
+    # Clean up intermediate files.
+    for _, coadder in coadders.items():
+        coadder.cleanup()
+
     
-    # cutbox = [[4.-2,4.-9],[-4.-2,-4.-9]]
-    coadd_map = pipeline.needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
-                                       lpeaks, lmins, lmaxs, response_func, beam_func,
-                                       out_beam_fwhm, out_root,cov_smooth_factor=args.cov_smooth_factor,
-                                       mask_postprocess_func=fmproc,
-                                       n_workers=args.nworkers,io_suffix=f'_data_covsmooth_{args.cov_smooth_factor}',
-                                       delete_intermediate=True)
+    # # cutbox = [[4.-2,4.-9],[-4.-2,-4.-9]]
+    # coadd_map = pipeline.needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
+    #                                    lpeaks, lmins, lmaxs, response_func, beam_func,
+    #                                    out_beam_fwhm, out_root,cov_smooth_factor=args.cov_smooth_factor,
+    #                                    mask_postprocess_func=fmproc,
+    #                                    n_workers=args.nworkers,io_suffix=f'_data_covsmooth_{args.cov_smooth_factor}',
+    #                                    delete_intermediate=True)
 
 
-    print(coadd_map.shape, coadd_map.wcs)
-    # plot(coadd_map,"all",0,mtype='coadd',colorbar=True,grid=True,ticks=10)
-    # smap = coadd_map.submap(np.asarray(cutbox)*u.degree)
-    # plot(smap,"all",0,mtype='coadd_submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
-    enmap.write_map(f'{out_root}/{outname}_coadd_map.fits',coadd_map)
+    # print(coadd_map.shape, coadd_map.wcs)
+    # # plot(coadd_map,"all",0,mtype='coadd',colorbar=True,grid=True,ticks=10)
+    # # smap = coadd_map.submap(np.asarray(cutbox)*u.degree)
+    # # plot(smap,"all",0,mtype='coadd_submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
+    # enmap.write_map(f'{out_root}/{outname}_coadd_map.fits',coadd_map)
