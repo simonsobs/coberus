@@ -60,4 +60,4 @@ if __name__ == '__main__':
     # plot(coadd_map,"all",0,mtype='coadd',colorbar=True,grid=True,ticks=10)
     # smap = coadd_map.submap(np.asarray(cutbox)*u.degree)
     # plot(smap,"all",0,mtype='coadd_submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
-    enmap.write_map(f'{out_root}/{outname}_coadd_map.fits',coadd_map)
+    enmap.write_map(f'{out_root}/{outname}_data_covsmooth_{args.cov_smooth_factor}_coadd_map.fits',coadd_map)

@@ -168,3 +168,4 @@ cython_debug/
 
 slurm*.sh
 slurm*.txt
+*_local.yaml
