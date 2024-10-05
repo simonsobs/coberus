@@ -41,17 +41,31 @@ if __name__ == '__main__':
 
 
     map_fname_func = lambda tag: f'{out_root}/{outname}_{tag}_map.fits'
-    base_tag = args.basetag # We will extract on to this geometry and use its mask for the final mask
-    lpeaks = utils.get_lpeaks(args.basis)
     lmins,lmaxs,fwhms, c = utils.get_properties('data.yaml',tags)
     beam_func = lambda tag, ells: maps.gauss_beam(ells, fwhms[tags.index(tag)])
     response_func = lambda tag: 1.0
-    out_beam_fwhm = args.fwhm
+
+    data_dict = {}
+    data_dict['lpeaks'] = utils.get_lpeaks(args.basis)
+    data_dict['output_beam_fwhm'] = args.fwhm
+    data_dict['cov_smooth_factor'] = args.cov_smooth_factor
+    data_dict['primary_map_tag'] = args.basetag # We will extract on to this geometry and use its mask for the final mask
+    data_dict['output_root'] = f'{out_root}/{outname}_data_covsmooth_{args.cov_smooth_factor}'
+    data_dict['output_map'] = f'{out_root}/{outname}_data_covsmooth_{args.cov_smooth_factor}_coadd_map.fits'
+    data_dict['map_metadata'] = {}
+    for i,tag in enumerate(tags):
+        data_dict['map_metadata'][tag] = {}
+        data_dict['map_metadata'][tag]['path'] = map_fname_func(tag)
+        data_dict['map_metadata'][tag]['mask'] = mask_fname_func(tag)
+        data_dict['map_metadata'][tag]['response'] = 1.0
+        data_dict['map_metadata'][tag]['lmin'] = lmins[i]
+        data_dict['map_metadata'][tag]['lmax'] = lmaxs[i]
+        data_dict['map_metadata'][tag]['beam'] = {'fwhm': fwhms[i]}
+        data_dict['map_metadata'][tag]['postprocess_mask'] = fmproc
 
 
 
-
-    input_data = parse_yaml_raw_as(CoberusInput, data)
+    input_data = CoberusInput.parse_obj(data_dict)
     wavelet_metadata = input_data.to_wavelet_metadata()
     maps = input_data.to_maps()
     primary_map = [m.path for m in maps if m.tag == input_data.primary_map_tag][0]
