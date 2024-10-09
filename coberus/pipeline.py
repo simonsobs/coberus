@@ -6,10 +6,10 @@ from orphics import io,maps,cosmology
 from coberus import Coadder, coadd
 from coberus import pipeline
 from dask.distributed import Client
-import time
+import time, psutil
 
-
-
+def free_mem():
+    return f"{psutil.virtual_memory()[1]/1024/1024/1024:.1f} GiB"
 
 
 def get_scales(basis,tags,ellmins,ellmaxs):
@@ -51,7 +51,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   out_beam_fwhm, out_root, cov_smooth_factor=64,
                   map_postprocess_func=None, mask_postprocess_func=None, n_workers=None,
                   io_suffix='', delete_intermediate=False,
-                  imaps=None, masks=None):
+                  nmap_fname_func=None):
 
     """
     Generic function for coadding maps using an empirical
@@ -118,6 +118,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     
     delete_intermediate : optional,bool
         Whether to delete intermediate outputs
+
+    nmap_fname_func : optional,func
+        Optional maps not used for covariance, but coadded with the same weights.
+        Accepts the tag name and returns a path to the input map
+
     
     Returns
     -------
@@ -127,12 +132,15 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     
     """
     start_time = time.time()
+
+    if nmap_fname_func is not None: 
+        do_noise = True
+    else:
+        do_noise = False
+    
     lmax = max(lpeaks)
     ells = np.arange(lmax)
-    if imaps is None:
-        shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
-    else:
-        shape,wcs = imaps[0].shape, imaps[0].wcs
+    shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
 
     # Initialize Wavelets
     uht  = uharm.UHT(shape, wcs)
@@ -141,44 +149,46 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     nwaves = basis.n
     wt = wv.WaveletTransform(uht, basis = basis)
 
+
+    def _get_wave(fname_func,itag,imask):
+        gmap = enmap.read_map(fname_func(itag))
+        if map_postprocess_func is not None:
+            gmap = map_postprocess_func(gmap)
+        if itag!=base_tag:
+            gmap = enmap.extract(gmap,shape,wcs)
+        gmap[imask==0] = 0
+        print("Wavelet transform...")
+        # Reconvolve to common beam
+        out_beam = maps.gauss_beam(ells, out_beam_fwhm)
+        in_beam = beam_func(itag,ells)
+        beam_ratio = out_beam / in_beam
+        wavecs = wt.map2wave(gmap,fl=beam_ratio,scales=scales[itag],fill_value=np.nan)
+        return wavecs
+
+
     # These will hold file names for maps, masks and covariance maps
     # for use by the Coberus coadder
     fmasks = {}
     fmaps = {}
+    nfmaps = {}
     fcovs = {}
     filenames = []
-
+    print(f"Free memory: {free_mem()}")
+    totgibytes = 0.
     # Loop through arrays
     for i,tag in enumerate(tags):
-        if imaps is None:
-            omap = enmap.read_map(map_fname_func(tag))
-        else:
-            omap = imaps[i].copy()
-        if map_postprocess_func is not None:
-            omap = map_postprocess_func(omap)
-        if masks is None:
-            mask = enmap.read_map(mask_fname_func(tag))
-        else:
-            mask = masks[i].copy()
+
+        mask = enmap.read_map(mask_fname_func(tag))
         if mask_postprocess_func is not None:
             mask = mask_postprocess_func(mask)
         if tag!=base_tag:
-            omap = enmap.extract(omap,shape,wcs)
             mask = enmap.extract(mask,shape,wcs)
         else:
             base_mask = mask
 
-        omap[mask==0] = 0
-        print("Wavelet transform...")
-        # Reconvolve to common beam
-        out_beam = maps.gauss_beam(ells, out_beam_fwhm)
-        in_beam = beam_func(tag,ells)
-        beam_ratio = out_beam / in_beam
-        # beam_ratio = None # !!!
-        wavecs = wt.map2wave(omap,fl=beam_ratio,scales=scales[tags[i]],fill_value=np.nan)
-        # plot(omap,tags[i],0,mtype='input_map',colorbar=True,grid=True,ticks=10) # these are input maps
-        # smap = omap.submap(np.asarray(cutbox)*u.degree)
-        # plot(smap,tags[i],0,mtype='submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
+        wavecs = _get_wave(map_fname_func,tag,mask)
+        if do_noise: 
+            nwavecs = _get_wave(nmap_fname_func,tag,mask)
 
         if i==0:
             # Save multimap template for final coadded map
@@ -201,13 +211,22 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             wfname = f'{out_root}/wavelet_map_{tags[i]}_scale_{j}{io_suffix}.fits'
             filenames.append(wfname)
             update(fmaps, j, wfname)
-            # print("Map MB: ",wmap.nbytes/1024/1024.)
             enmap.write_map(wfname,wmap)
 
-    ### !!!
-    ells = np.arange(lmax)
-    ###
+            totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.*2.)
 
+            if do_noise:
+                nwfname = f'{out_root}/wavelet_nmap_{tags[i]}_scale_{j}{io_suffix}.fits'
+                filenames.append(nwfname)
+                update(nfmaps, j, nwfname)
+                enmap.write_map(nwfname,nwavecs.maps[j])
+                totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.)
+
+
+
+    print(wmap.dtype)
+    print(f"Total disk: {totgibytes:.1f} GiB")
+    print(f"Free memory: {free_mem()}")
     print("Building covariance")
     included_tags = {}
     for k in range(nwaves):
@@ -221,57 +240,75 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
 
         for i in range(len(itags)):
             for j in range(i,len(itags)):
-                print("Smoothing..")
+                print(f"Smoothing {k}: {i} x {j}..")
                 wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits')
                 wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits')
-
-                cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor,slow=False) # this factor needs to be adjusted
-                # if (k<2 or k>4)  and ('night' in itags[i]):
-                #     io.hplot(cov,f'{out_root}/{itags[i]}_{itags[j]}_cov_{k}',downgrade=4)
+                
+                if cov_smooth_factor!=1:
+                    cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor,slow=False) # this factor needs to be adjusted
+                else:
+                    cov = wmap1*wmap2
                     
                 fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}{io_suffix}.fits'
                 filenames.append(fcovname)
                 fcovs[k][i][j] = fcovname
                 fcovs[k][j][i] = fcovname
                 enmap.write_map(fcovname,cov)
+                totgibytes = totgibytes + (cov.nbytes/1024/1024./1024.)
+
+    print(cov.dtype)
+    print(f"Total disk: {totgibytes:.1f} GiB")
+    print(f"Free memory: {free_mem()}")
+
+    outmaptypes = ['coadd']
+    if do_noise: outmaptypes.append(['noise_coadd'])
+    outmaps = {}
+
+    for outmaptype in outmaptypes:
+
+        # This part uses Coberus to do distributed Dask
+        # pixel-space coadding of the maps for each
+        # wavelet scale
+        for j in range(nwaves):
+            print(f"Coadding {outmaptype} scale {j}...")
+            if outmaptype=='coadd':
+                lmaps = fmaps[j] 
+            elif outmaptype=='noise_coadd':
+                lmaps = nfmaps[j]
+            masks = fmasks[j]
+            covs = fcovs[j]
+            responses = [response_func(tag) for tag in included_tags[j]]
+
+            coadder = Coadder(
+                maps=lmaps,
+                masks=masks,
+                covariance_maps=covs,
+                responses=responses
+            )
+
+            print(coadder)
+
+            with Client(n_workers=n_workers) as client:
+                print("Number of workers : ", len(client.scheduler_info()['workers']))
+                # Result is a dask array
+                result = coadd(client, coadder)
+                # This is now a numpy array
+                arr = result.compute()
+                owave.maps[j] = enmap.enmap(arr.copy(),wcs)
+
+        print("wave2map")
+        coadd_map = wt.wave2map(owave)
+        coadd_map[base_mask==0] = 0
+        outmaps[outmaptype] = coadd_map.copy()
 
 
-    # This part uses Coberus to do distributed Dask
-    # pixel-space coadding of the maps for each
-    # wavelet scale
-    for j in range(nwaves):
-        print(f"Coadding scale {j}...")
-        lmaps = fmaps[j]
-        masks = fmasks[j]
-        covs = fcovs[j]
-        responses = [response_func(tag) for tag in included_tags[j]]
-
-        coadder = Coadder(
-            maps=lmaps,
-            masks=masks,
-            covariance_maps=covs,
-            responses=responses
-        )
-
-        print(coadder)
-
-        with Client(n_workers=n_workers) as client:
-            print("Number of workers : ", len(client.scheduler_info()['workers']))
-            # Result is a dask array
-            result = coadd(client, coadder)
-            # This is now a numpy array
-            arr = result.compute()
-            owave.maps[j] = enmap.enmap(arr.copy(),wcs)
-
-    print("wave2map")
-    coadd_map = wt.wave2map(owave)
-    coadd_map[base_mask==0] = 0
-    elapsed_time = time.time() - start_time
+    print(f"Free memory: {free_mem()}")
 
     if delete_intermediate:
         for filename in filenames:
             os.remove(filename)
     
+    elapsed_time = time.time() - start_time
     print(f"Done in {elapsed_time/60.:.2f} minutes.")
-    return coadd_map
+    return outmaps
     

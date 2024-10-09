@@ -17,7 +17,7 @@ act_root = paths['act_root']
 out_root = paths['out_root']
 mask_root = paths['mask_root']
 sim_root = paths['sim_root']
-cmb_sim_fname = lambda simid: f"{sim_root}/fullskyLensedUnabberatedCMB_alm_set00_{simid:05d}.fits"
+cmb_sim_fname = lambda simid,iset=0: f"{sim_root}/fullskyLensedUnabberatedCMB_alm_set0{iset}_{simid:05d}.fits"
 
 planck_tags = ['030','044','070','100','143','217','353','545']
 

@@ -14,23 +14,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Make a mask.')
     parser.add_argument("out_name", type=str,help='Name of outputs. Could include a path.')
     parser.add_argument("--fwhm", type=float,default=1.6,help='Output FWHM.')
-    parser.add_argument("--cov-smooth-factor", type=int,default=64,help='Covariance smooth factor.')
-    parser.add_argument("--sim-index", type=int,default=0,help='Sim index.')
-    parser.add_argument("--nworkers", type=int,default=None,help='Number of workers.')
     parser.add_argument("--basetag", type=str,default='night_pa5_f090',help='Base tag.')
-    parser.add_argument("--basis", type=str,default='lensmode',help='Base tag.')
-    parser.add_argument("--tags",     type=str,  default=None,help="Comma separated list of tags.")
+    parser.add_argument("--cov-smooth-factor", type=int,default=64,help='Covariance smooth factor.')
     args = parser.parse_args()
 
     gal = '80'
     out_root = utils.out_root
     outname = args.out_name
     mask_fname_func = lambda tag: f'{out_root}/{outname}_{tag}_mask{gal}.fits'
-    base_tag = args.basetag # We will extract on to this geometry and use its mask for the final mask
-    mask = enmap.read_map(mask_fname_func(base_tag))
+    mask = enmap.read_map(mask_fname_func(args.basetag))
     width_deg = 2.0
     mask = maps.cosine_apodize(mask,width_deg)
-    shape,wcs = enmap.read_map_geometry(f'{out_root}/sim_0_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits')
+    shape,wcs = enmap.read_map_geometry(f'{out_root}/sim_0_iset_0_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits')
     lmax = 6000
     out_beam_fwhm = args.fwhm
 
@@ -43,15 +38,11 @@ if __name__ == '__main__':
     for simid in range(Nsims):
         print(simid)
         alm = hp.read_alm(utils.cmb_sim_fname(simid),hdu=1)
-        alm = cs.almxfl(alm,lambda x: maps.gauss_beam(x,out_beam_fwhm)) # !!!
+        alm = cs.almxfl(alm,lambda x: maps.gauss_beam(x,out_beam_fwhm))
         imap = cs.alm2map(alm,enmap.empty(shape,wcs,dtype=np.float32))
         imap = imap * mask
         ialm = cs.map2alm(imap,lmax=lmax)
-        omap = enmap.read_map(f'{out_root}/sim_{simid}_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits') * mask
-        # if simid==0:
-        #     io.hplot(omap,'omap',downgrade=8)
-        #     io.hplot(imap,'imap',downgrade=8)
-        #     io.hplot(omap-imap,'dmap',downgrade=8)
+        omap = enmap.read_map(f'{out_root}/sim_{simid}_iset_0_{outname}_coadd_covsmooth_{args.cov_smooth_factor}.fits') * mask
         
         dalm = cs.map2alm(omap,lmax=lmax)
 
@@ -70,4 +61,4 @@ if __name__ == '__main__':
     pl.add(cents,r,marker='o')
     pl.hline(y=0)
     pl._ax.set_ylim(-0.01,0.01)
-    pl.done('rcls.png')
+    pl.done(f'{out_root}/rcls.png')

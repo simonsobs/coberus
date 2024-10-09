@@ -53,7 +53,7 @@ if __name__ == '__main__':
                                        out_beam_fwhm, out_root,cov_smooth_factor=args.cov_smooth_factor,
                                        mask_postprocess_func=fmproc,
                                        n_workers=args.nworkers,io_suffix=f'_data_covsmooth_{args.cov_smooth_factor}',
-                                       delete_intermediate=False)
+                                       delete_intermediate=False)['coadd']
 
 
     print(coadd_map.shape, coadd_map.wcs)
