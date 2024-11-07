@@ -261,7 +261,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     print(f"Free memory: {free_mem()}")
 
     outmaptypes = ['coadd']
-    if do_noise: outmaptypes.append(['noise_coadd'])
+    if do_noise: outmaptypes.append('noise_coadd')
     outmaps = {}
 
     for outmaptype in outmaptypes:
