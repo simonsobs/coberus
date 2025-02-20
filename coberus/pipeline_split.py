@@ -8,8 +8,8 @@ from dask.distributed import Client
 import time, psutil
 
 # temporary workaround for pip installing
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../scripts/")
-import utils
+#sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../scripts/")
+#import utils
 
 # Helper for dictionaries
 def update(d,key,item):
@@ -120,7 +120,7 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
     
     lmax = max(lpeaks)
     ells = np.arange(lmax)
-    shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
+    shape,wcs = enmap.read_map_geometry(dmap_fname_func(base_tag))
 
     # Initialize Wavelets
     uht  = uharm.UHT(shape, wcs)
