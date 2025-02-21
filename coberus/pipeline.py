@@ -1,6 +1,5 @@
 from pixell import enmap,curvedsky as cs, wavelets as wv,uharm,multimap,utils as u
 import numpy as np
-#import utils
 import os,sys
 from orphics import io,maps,cosmology
 from coberus import Coadder, coadd
@@ -46,12 +45,15 @@ def update(d,key,item):
     d[key].append(item)
 
 
-def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
-                  lpeaks, lmins, lmaxs, response_func, beam_func,
-                  out_beam_fwhm, out_root, cov_smooth_factor=64,
-                  map_postprocess_func=None, mask_postprocess_func=None, n_workers=None,
+def needlet_coadd(map_fname_func, mask_fname_func,
+                  tags, base_tag, lpeaks, lmins,
+                  lmaxs, response_func,
+                  beam_func, out_beam_fwhm, out_root,
+                  cov_smooth_factor=64,
+                  map_postprocess_func=None, mask_postprocess_func=None,
+                  n_workers=None,
                   io_suffix='', delete_intermediate=False,
-                  nmap_fname_func=None):
+                  nmap_labels=[], nmap_label_fname_func=None):
 
     """
     Generic function for coadding maps using an empirical
@@ -59,6 +61,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     needlet basis. Each input map is identified
     by a string called 'tag'. The properties of these maps are specified
     through functions of the tag name.
+
+    However, if nmap_label_fname_func are provided, covariances +
+    weights estimated from the data map are then used to coadd the
+    "nmap"s and they are returned as well, formatted as:
+    output[f'{nmap_label}_coadd'] for [nmap_label,...] in nmap_labels.
 
     Parameters
     ----------
@@ -114,16 +121,19 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         Number of workers for distributed Dask tasks
     
     io_suffix : optional,str
-        Suffix for intermediate outputs (use a different one for each simulation)
+        Suffix for intermediate outputs (different one for each simulation)
     
     delete_intermediate : optional,bool
         Whether to delete intermediate outputs
 
-    nmap_fname_func : optional,func
-        Optional maps not used for covariance, but coadded with the same weights.
-        Accepts the tag name and returns a path to the input map
+    nmap_labels : optional,list[str]
+        List of possible optional maps' labels
 
-    
+    nmap_label_fname_func : optional,func | (nmap_label, fname) -> nmap
+        Optional maps not used for covariance, but coadded with
+        the same weights. Accepts the optional map's label and filename
+        and returns a pat
+
     Returns
     -------
 
@@ -132,11 +142,6 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     
     """
     start_time = time.time()
-
-    if nmap_fname_func is not None: 
-        do_noise = True
-    else:
-        do_noise = False
     
     lmax = max(lpeaks)
     ells = np.arange(lmax)
@@ -149,15 +154,18 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     nwaves = basis.n
     wt = wv.WaveletTransform(uht, basis = basis)
 
+    # if using optional additional maps to coadd
+    do_nmaps = len(nmap_labels) > 0 and nmap_label_fname_func is not None
 
-    def _get_wave(fname_func,itag,imask):
+    def _get_wave(fname_func, itag, imask):
         gmap = enmap.read_map(fname_func(itag))
+
         if map_postprocess_func is not None:
             gmap = map_postprocess_func(gmap)
-        if itag!=base_tag:
+        if itag != base_tag:
             gmap = enmap.extract(gmap,shape,wcs)
+
         gmap[imask==0] = 0
-        print("Wavelet transform...")
         # Reconvolve to common beam
         out_beam = maps.gauss_beam(ells, out_beam_fwhm)
         in_beam = beam_func(itag,ells)
@@ -165,19 +173,20 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         wavecs = wt.map2wave(gmap,fl=beam_ratio,scales=scales[itag],fill_value=np.nan)
         return wavecs
 
-
     # These will hold file names for maps, masks and covariance maps
     # for use by the Coberus coadder
     fmasks = {}
     fmaps = {}
-    nfmaps = {}
     fcovs = {}
     filenames = []
+    # store additional maps if desired
+    if do_nmaps: nfmaps = {label: {} for label in nmap_labels}
+
     print(f"Free memory: {free_mem()}")
     totgibytes = 0.
+
     # Loop through arrays
     for i,tag in enumerate(tags):
-
         mask = enmap.read_map(mask_fname_func(tag))
         if mask_postprocess_func is not None:
             mask = mask_postprocess_func(mask)
@@ -187,8 +196,8 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             base_mask = mask
 
         wavecs = _get_wave(map_fname_func,tag,mask)
-        if do_noise: 
-            nwavecs = _get_wave(nmap_fname_func,tag,mask)
+        nwavecs = {label: _get_wave(lambda fname: nmap_label_fname_func(label, fname),
+                                    tag, mask) for label in nmap_labels}
 
         if i==0:
             # Save multimap template for final coadded map
@@ -197,11 +206,9 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         # Loop through wavelet scales
         for j,wmap in enumerate(wavecs.maps):
             if (j not in scales[tags[i]]): continue
-            #plot(wmap,tags[i],j) # these are wavelet coefficient maps
             print("Projecting mask and writing wavelet map...")
             # Project masks on to wavelet map geometries
             omask = enmap.project(mask,wmap.shape,wmap.wcs,order=0)
-            # plot(omask,tags[i],j,mtype='mask',colorbar=True) # these are wavelet coefficient maps
 
             mfname = f'{out_root}/wavelet_mask_{tags[i]}_scale_{j}{io_suffix}.fits'
             filenames.append(mfname)
@@ -215,11 +222,12 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
 
             totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.*2.)
 
-            if do_noise:
-                nwfname = f'{out_root}/wavelet_nmap_{tags[i]}_scale_{j}{io_suffix}.fits'
+            # optional maps
+            for label in nmap_labels:
+                nwfname = f'{out_root}/wavelet_{label}_{tags[i]}_scale_{j}{io_suffix}.fits'
                 filenames.append(nwfname)
-                update(nfmaps, j, nwfname)
-                enmap.write_map(nwfname,nwavecs.maps[j])
+                update(nfmaps[label], j, nwfname)
+                enmap.write_map(nwfname,nwavecs[label].maps[j])
                 totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.)
 
 
@@ -227,7 +235,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     print(wmap.dtype)
     print(f"Total disk: {totgibytes:.1f} GiB")
     print(f"Free memory: {free_mem()}")
-    print("Building covariance")
+    print("Building covariance...")
     included_tags = {}
     for k in range(nwaves):
         fcovs[k] = [[''] * len(fmaps[k]) for h in range(len(fmaps[k]))]
@@ -256,25 +264,23 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                 enmap.write_map(fcovname,cov)
                 totgibytes = totgibytes + (cov.nbytes/1024/1024./1024.)
 
-    print(cov.dtype)
     print(f"Total disk: {totgibytes:.1f} GiB")
     print(f"Free memory: {free_mem()}")
 
-    outmaptypes = ['coadd']
-    if do_noise: outmaptypes.append('noise_coadd')
+    outmaptypes = ['coadd'] + [label + '_coadd' for label in nmap_labels]
     outmaps = {}
 
     for outmaptype in outmaptypes:
-
         # This part uses Coberus to do distributed Dask
         # pixel-space coadding of the maps for each
         # wavelet scale
         for j in range(nwaves):
             print(f"Coadding {outmaptype} scale {j}...")
-            if outmaptype=='coadd':
-                lmaps = fmaps[j] 
-            elif outmaptype=='noise_coadd':
-                lmaps = nfmaps[j]
+            if outmaptype == 'coadd':
+                lmaps = fmaps[j]
+            else:
+                lmaps = nfmaps[outmaptype[:-6]][j]
+
             masks = fmasks[j]
             covs = fcovs[j]
             responses = [response_func(tag) for tag in included_tags[j]]
@@ -286,24 +292,19 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                 responses=responses
             )
 
-            print(coadder)
-
             with Client(n_workers=n_workers) as client:
-                print("Number of workers : ", len(client.scheduler_info()['workers']))
+                print("Number of workers: ", len(client.scheduler_info()['workers']))
                 # Result is a dask array
                 result = coadd(client, coadder)
                 # This is now a numpy array
                 arr = result.compute()
                 owave.maps[j] = enmap.enmap(arr.copy(),wcs)
 
-        print("wave2map")
         coadd_map = wt.wave2map(owave)
         coadd_map[base_mask==0] = 0
         outmaps[outmaptype] = coadd_map.copy()
 
-
     print(f"Free memory: {free_mem()}")
-
     if delete_intermediate:
         for filename in filenames:
             os.remove(filename)
@@ -311,4 +312,3 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     elapsed_time = time.time() - start_time
     print(f"Done in {elapsed_time/60.:.2f} minutes.")
     return outmaps
-    
