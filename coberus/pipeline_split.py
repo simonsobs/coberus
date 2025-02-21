@@ -19,41 +19,33 @@ def update(d,key,item):
         d[key] = []
     d[key].append(item)
 
-def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
-                        mask_fname_func, tags, base_tag, lpeaks, lmins,
+def needlet_coadd_extra(map_fname_func, mask_fname_func,
+                        tags, base_tag, lpeaks, lmins,
                         lmaxs, response_func,
                         beam_func, out_beam_fwhm, out_root,
                         cov_smooth_factor=64,
                         map_postprocess_func=None, mask_postprocess_func=None,
                         n_workers=None,
-                        io_suffix='', delete_intermediate=False):
+                        io_suffix='', delete_intermediate=False,
+                        nmap_labels=[], nmap_label_fname_func=None):
 
     """
-    Modification to generic coadding function (coberus/pipeline.py)
-    using an empirical covariance determined from smoothed products
-    of maps in a needlet basis. Each input map is identified
+    Generic function for coadding maps using an empirical
+    covariance determined from smoothed products of maps in a
+    needlet basis. Each input map is identified
     by a string called 'tag'. The properties of these maps are specified
     through functions of the tag name.
 
-    This function does the following:
-    
-    Take a signal map (from smap_fname_func), add it to a noise map
-    (from nmap_fname_func) to build a combined data (signal+noise) map.
-    However, the empirical covariance + weights estimated from the data map
-    is then used to coadd the signal-only maps as well as the noise-only maps.
-    All three coadds are then returned.
+    However, if nmap_label_fname_func are provided, covariances +
+    weights estimated from the data map are then used to coadd the
+    "nmap"s and they are returned as well, formatted as:
+    output[f'{nmap_label}_coadd']
 
     Parameters
     ----------
 
-    dmap_fname_func : func
+    map_fname_func : func
         Accepts the tag name and returns a path to the input signal+noise map
-
-    smap_fname_func : func
-        Accepts the tag name and returns a path to the input signal map
-    
-    nmap_fname_func : func
-        Accepts the tag name and returns a path to the input noise map
 
     mask_fname_func : func
         Accepts the tag name and returns a path to the mask
@@ -108,7 +100,13 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
     delete_intermediate : optional,bool
         Whether to delete intermediate outputs
 
-    
+    nmap_labels : optional,list[str]
+        List of possible optional maps' labels
+
+    nmap_label_fname_func : optional,func | (nmap_label, fname) -> nmap
+        Optional maps not used for covariance, but coadded with the same weights.
+        Accepts the tag name and returns a path to the input map
+
     Returns
     -------
 
@@ -120,7 +118,7 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
     
     lmax = max(lpeaks)
     ells = np.arange(lmax)
-    shape,wcs = enmap.read_map_geometry(dmap_fname_func(base_tag))
+    shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
 
     # Initialize Wavelets
     uht  = uharm.UHT(shape, wcs)
@@ -128,6 +126,9 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
     scales = pipeline.get_scales(basis,tags,lmins,lmaxs)
     nwaves = basis.n
     wt = wv.WaveletTransform(uht, basis = basis)
+
+    # if using optional additional maps to coadd
+    do_nmaps = len(nmap_labels) > 0 and nmap_label_fname_func is not None
 
     def _get_wave(fname_func, itag, imask):
         gmap = enmap.read_map(fname_func(itag))
@@ -149,10 +150,10 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
     # for use by the Coberus coadder
     fmasks = {}
     fmaps = {}
-    nfmaps = {}
-    sfmaps = {}
     fcovs = {}
     filenames = []
+    # store additional maps if desired
+    if do_nmaps: nfmaps = {label: {} for label in nmap_labels}
 
     print(f"Free memory: {pipeline.free_mem()}")
     totgibytes = 0.
@@ -167,9 +168,9 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
         else:
             base_mask = mask
 
-        swavecs = _get_wave(smap_fname_func,tag,mask)
-        nwavecs = _get_wave(nmap_fname_func,tag,mask)
-        wavecs = _get_wave(dmap_fname_func,tag,mask)
+        wavecs = _get_wave(map_fname_func,tag,mask)
+        nwavecs = {label: _get_wave(lambda fname: nmap_label_fname_func(label, fname),
+                                    tag, mask) for label in nmap_labels}
 
         if i==0:
             # Save multimap template for final coadded map
@@ -194,19 +195,14 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
 
             totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.*2.)
 
-            # noise only
-            nwfname = f'{out_root}/wavelet_nmap_{tags[i]}_scale_{j}{io_suffix}.fits'
-            filenames.append(nwfname)
-            update(nfmaps, j, nwfname)
-            enmap.write_map(nwfname,nwavecs.maps[j])
-            totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.)
+            # optional maps
+            for label in nmap_labels:
+                nwfname = f'{out_root}/wavelet_{label}_{tags[i]}_scale_{j}{io_suffix}.fits'
+                filenames.append(nwfname)
+                update(nfmaps[label], j, nwfname)
+                enmap.write_map(nwfname,nwavecs[label].maps[j])
+                totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.)
 
-            # signal only
-            swfname = f'{out_root}/wavelet_smap_{tags[i]}_scale_{j}{io_suffix}.fits'
-            filenames.append(swfname)
-            update(sfmaps, j, swfname)
-            enmap.write_map(swfname,swavecs.maps[j])
-            totgibytes = totgibytes + (wmap.nbytes/1024/1024./1024.)
 
 
     print(wmap.dtype)
@@ -244,7 +240,7 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
     print(f"Total disk: {totgibytes:.1f} GiB")
     print(f"Free memory: {pipeline.free_mem()}")
 
-    outmaptypes = ['coadd', 'noise_coadd', 'signal_coadd']
+    outmaptypes = ['coadd'] + [label + '_coadd' for label in nmap_labels]
     outmaps = {}
 
     for outmaptype in outmaptypes:
@@ -254,11 +250,9 @@ def needlet_coadd_extra(dmap_fname_func, smap_fname_func, nmap_fname_func,
         for j in range(nwaves):
             print(f"Coadding {outmaptype} scale {j}...")
             if outmaptype == 'coadd':
-                lmaps = fmaps[j] 
-            elif outmaptype == 'noise_coadd':
-                lmaps = nfmaps[j]
-            elif outmaptype == 'signal_coadd':
-                lmaps = sfmaps[j]
+                lmaps = fmaps[j]
+            else:
+                lmaps = nfmaps[outmaptype[:-6]][j]
 
             masks = fmasks[j]
             covs = fcovs[j]
