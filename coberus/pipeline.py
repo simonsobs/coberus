@@ -132,7 +132,7 @@ def needlet_coadd(map_fname_func, mask_fname_func,
     nmap_label_fname_func : optional,func | (nmap_label, fname) -> nmap
         Optional maps not used for covariance, but coadded with
         the same weights. Accepts the optional map's label and filename
-        and returns a pat
+        and returns a path
 
     Returns
     -------
@@ -155,7 +155,7 @@ def needlet_coadd(map_fname_func, mask_fname_func,
     wt = wv.WaveletTransform(uht, basis = basis)
 
     # if using optional additional maps to coadd
-    do_nmaps = len(nmap_labels) > 0 and nmap_label_fname_func is not None
+    do_nmaps = len(nmap_labels) > 0 and (nmap_label_fname_func is not None)
 
     def _get_wave(fname_func, itag, imask):
         gmap = enmap.read_map(fname_func(itag))
