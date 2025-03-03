@@ -13,7 +13,6 @@ import dask.array as da
 import dask
 from dask.distributed import Client
 from astropy.io import fits
-import argparse
 
 debug = False
 Chunk = tuple[tuple[int], tuple[int]]
@@ -32,6 +31,10 @@ class Coadder(BaseModel):
     responses: list[float]
         The responses to use for those masks
 
+    deproj_responses: list[list[float]]
+        The responses to use for deprojected components. If an empty list is
+        passed, no components will be deprojected.
+
     covariance_maps: list[list[Path]]
         A 2D matrix of paths stating the covariance maps for the real maps.
         E.g. covariance_maps[1][2] is the covariance between maps[1] and maps[2].
@@ -43,6 +46,7 @@ class Coadder(BaseModel):
     maps: list[Path]
     masks: list[Path]
     responses: list[float]
+    deproj_responses: list[list[float]]
 
     covariance_maps: list[list[Path]]
 
@@ -176,6 +180,7 @@ def coadd_maps_pixels(
     covariance_maps: np.ndarray,
     masks: np.ndarray,
     responses: np.ndarray,
+    deproj_responses: np.ndarray,
 ) -> np.ndarray:
     """
     Co-adds the maps in the pixel domain. Assumes all masks and maps are the same size.
@@ -183,6 +188,15 @@ def coadd_maps_pixels(
 
     n_y, n_x = maps.shape[-2:]
     output = np.zeros((n_y, n_x), dtype=np.float32)
+
+    n_deproj = len(deproj_responses)
+    n_map = len(maps)
+
+    if n_deproj > 0:
+        response_mat = (
+            np.append(responses, deproj_responses).reshape(n_deproj + 1, n_map).T
+        )
+        det_q_sub_vec = np.zeros(n_deproj + 1, dtype=np.float32)
 
     for i in range(n_x):
         for j in range(n_y):
@@ -200,19 +214,42 @@ def coadd_maps_pixels(
             cov = covariance_maps[:, :, j, i][:, mask][mask, :].reshape((n_out, n_out))
             if debug:
                 print(cov)
-            a = responses[mask]
 
-            cinva = np.linalg.solve(cov, a)
-            denom = np.dot(a, cinva)
+            # Standard ILC
+            if n_deproj == 0:
+                a = responses[mask]
 
-            if denom == 0.0:
-                output[j, i] = 0.0
-                continue
+                cinva = np.linalg.solve(cov, a)
+                denom = np.dot(a, cinva)
 
-            cinvd = np.linalg.solve(cov, masked_maps)
-            numer = np.dot(a, cinvd)
+                if denom == 0.0:
+                    output[j, i] = 0.0
+                    continue
 
-            output[j, i] = numer / denom
+                cinvd = np.linalg.solve(cov, masked_maps)
+                numer = np.dot(a, cinvd)
+
+                output[j, i] = numer / denom
+
+            # Constrained ILC (see Eq. 29 & 30 of 2307.01043)
+            else:
+                a_mix = response_mat[mask, :]
+                q_ab = np.dot(np.linalg.solve(cov, a_mix).T, a_mix)
+                det_q = np.linalg.det(q_ab)
+
+                for k in range(n_deproj + 1):
+                    q_ab_excluding_a = np.concatenate(
+                        (q_ab[:k, :], q_ab[k + 1 :, :]), axis=0
+                    )
+                    qsub = np.concatenate(
+                        (q_ab_excluding_a[:, :0], q_ab_excluding_a[:, 1:]), axis=1
+                    )
+                    det_q_sub_vec[k] = (-1.0) ** k * np.linalg.det(qsub)
+
+                # Compute weights
+                a_eff = (np.dot(det_q_sub_vec, a_mix.T) / det_q).astype(np.float32)
+                weights = np.linalg.solve(cov, a_eff)
+                output[j, i] = np.dot(weights, masked_maps)
 
     return output
 
@@ -232,6 +269,7 @@ def coadded_map_wrapper(
     covariance_maps: np.ndarray,
     masks: np.ndarray,
     responses: np.ndarray,
+    deproj_responses: np.ndarray,
     chunk: Chunk,
 ) -> np.ndarray:
     """
@@ -239,7 +277,9 @@ def coadded_map_wrapper(
     the chunk to.
     """
 
-    return coadd_maps_pixels(maps, covariance_maps, masks, responses), chunk
+    return coadd_maps_pixels(
+        maps, covariance_maps, masks, responses, deproj_responses
+    ), chunk
 
 
 def create_tasks_for_chunk(
@@ -261,6 +301,7 @@ def create_tasks_for_chunk(
         covariances,
         masks,
         np.array(coadder.responses, dtype=np.float32),
+        np.array(coadder.deproj_responses, dtype=np.float32),
         chunk,
     )
 
@@ -287,4 +328,3 @@ def coadd(client: Client, coadder: Coadder) -> da.Array:
         write_to_main_array(image, chunk, main_array)
 
     return main_array
-

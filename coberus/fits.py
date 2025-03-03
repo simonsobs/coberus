@@ -9,6 +9,7 @@ from astropy.wcs import WCS
 
 import pixell.enmap
 
+
 def extract_wcs(input: Path) -> WCS:
     """
     Extract the WCS from a FITS file.
