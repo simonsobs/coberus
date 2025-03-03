@@ -1,15 +1,14 @@
-from pixell import enmap, wavelets as wv, uharm
+from pixell import enmap,curvedsky as cs, wavelets as wv,uharm,multimap,utils as u
 import numpy as np
-
-# import utils
-import os
-from orphics import maps, cosmology
+import os,sys
+from orphics import io,maps
 from coberus import Coadder, coadd
+from coberus import pipeline
 from dask.distributed import Client
 import time
+import healpy as hp
 
-
-def get_scales(basis, tags, ellmins, ellmaxs):
+def get_scales(basis,tags,ellmins,ellmaxs):
     """
     Given a pixell.wavelets.basis wavelet basis
     object and minimum and maximum multipoles
@@ -20,27 +19,22 @@ def get_scales(basis, tags, ellmins, ellmaxs):
     """
     ntags = len(ellmins)
     scales = {}
-    if len(ellmaxs) != ntags:
-        raise ValueError
-    for tag, ellmin, ellmax in zip(tags, ellmins, ellmaxs):
+    if len(ellmaxs)!=ntags: raise ValueError
+    for tag,ellmin,ellmax in zip(tags,ellmins,ellmaxs):
         scales[tag] = []
         for i in range(basis.n):
             wlmin = basis.lmins[i]
             wlmax = basis.lmaxs[i]
-            if ellmin is None:
-                ellmin = 0
-            if ellmax is None:
-                ellmax = np.inf
-            if ellmin > wlmin:
-                continue
-            if ellmax < wlmax:
-                continue
+            if ellmin is None: ellmin = 0
+            if ellmax is None: ellmax = np.inf
+            if (ellmin>wlmin): continue
+            if (ellmax<wlmax): continue
             scales[tag].append(i)
     return scales
 
 
 # Helper for dictionaries
-def update(d, key, item):
+def update(d,key,item):
     try:
         d[key]
     except KeyError:
@@ -48,28 +42,56 @@ def update(d, key, item):
     d[key].append(item)
 
 
-def needlet_coadd(
-    map_fname_func,
-    mask_fname_func,
-    tags,
-    base_tag,
-    lpeaks,
-    lmins,
-    lmaxs,
-    response_func,
-    beam_func,
-    out_beam_fwhm,
-    out_root,
-    cov_smooth_factor=64,
-    map_postprocess_func=None,
-    mask_postprocess_func=None,
-    n_workers=None,
-    io_suffix="",
-    delete_intermediate=False,
-    imaps=None,
-    masks=None,
-    deproj_response_funcs=[],
-):
+def compute_tophat_beam(w_rad, lmax, w_rad_in=None, n_theta=20000):
+    """
+    Computes harmonic space beam for top hat filter used in 2307.01258.
+
+    Parameters
+    ----------
+
+    w_rad: float
+        Smoothing scale in radians
+    
+    lmax: int
+        Maximum multipole
+
+    w_rad_in: float, optional
+        Optional float that sets a second filter scale and excludes modes below
+        this filter scale. Used for choosing an annulus in angular space
+
+    n_theta: float, optional
+        Number of theta bins to use when computing the angular smoothing
+        function.
+    
+    Returns
+    -------
+
+    filt_harm: float array
+        Harmonic-space filter beam for multipoles up to lmax. 
+
+    """
+    
+    theta_max = 10 * w_rad
+    theta = np.linspace(0, theta_max, n_theta)
+    filt_ang = 1 / ((1+(theta /w_rad ))**6)
+    
+    if w_rad_in is not None:
+        filt_ang -= 1 / ((1+(theta/w_rad_in))**6)
+    
+    filt_harm = hp.sphtfunc.beam2bl(filt_ang, theta, lmax)
+    filt_harm /= filt_harm[0]
+    
+    return filt_harm
+
+
+def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
+                  lpeaks, lmins, lmaxs, response_func, deproj_response_func, 
+                  beam_func, out_beam_fwhm, out_root, cov_smooth_type='block', 
+                  cov_smooth_factor=64, ilc_bias_tol=0.01, fft_smooth=False,
+                  smooth_mean_cov=True, cov_smooth_scales=None, use_annulus=False,
+                  annulus_fwhm_ratio=0.5, map_postprocess_func=None, 
+                  mask_postprocess_func=None, n_workers=None):
+
     """
     Generic function for coadding maps using an empirical
     covariance determined from smoothed products of maps in a
@@ -99,11 +121,11 @@ def needlet_coadd(
     lmins : list
         List of minimum multipoles beyond which a tag is not used
         in a wavelet scale
-
+    
     lmaxs : list
         List of maximum multipoles beyond which a tag is not used
         in a wavelet scale
-
+    
     response_func : func
         Accepts the tag name and returns the map response value.
         Use lambda x: 1 for the CMB solution.
@@ -118,216 +140,308 @@ def needlet_coadd(
     out_root : str
         Root path for outputs
 
-    cov_smooth_factor : optional,int
-        Factor by which to block downgrade the covariance maps
+    cov_smooth_type : optional,str
+        Type of smoothing to use when constructing the covariance. Current
+        options are 'block', 'gaussian', and 'tophat'. Default value is 'block'.
 
+    cov_smooth_factor : optional,int
+        Factor by which to block downgrade the covariance maps if using block
+        smoothing.
+
+    ilc_bias_tol : optional, float
+        Bias tolerance used to determine FWHM for Gaussian smoothing of
+        of covariance if using Gaussian smoothing. Based on Eq. 43 of 
+        2307.01043.
+
+    fft_smooth : optional, boolean
+        If true, use FFT's instead of SHT's to smooth the map. Default 
+        option is to use SHT's.
+
+    smooth_mean_cov: optional, boolean
+        If true, computes the covariance from <(A-A_smooth)(B-B_smooth)>, as
+        in pyilc. Otherwise, computes the covariance from <AB>. Default is True.
+        
     map_postprocess_func : optional,func
         A function to apply to each loaded map
-
+    
     mask_postprocess_func : optional,func
         A function to apply to each loaded mask
-
-    n_workers : optional,int
-        Number of workers for distributed Dask tasks
-
-    io_suffix : optional,str
-        Suffix for intermediate outputs (use a different one for each simulation)
-
-    delete_intermediate : optional,bool
-        Whether to delete intermediate outputs
-
-    deproj_response_funcs: optional, list
-        List of functions that accept the tag name and return the map response.
-        These components will be deprojected using constrained ILC.
-
+    
+    
     Returns
     -------
 
     coadd_map : ndmap
        The final coadded map.
-
+    
     """
     start_time = time.time()
-    lmax = max(lpeaks)
+    lmax = max(lpeaks) # Cosine needlets have zero support beyond lpeak
     ells = np.arange(lmax)
-    if imaps is None:
-        shape, wcs = enmap.read_map_geometry(map_fname_func(base_tag))
-    else:
-        shape, wcs = imaps[0].shape, imaps[0].wcs
+    shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
+    n_deproj = len(deproj_response_func)
+    n_map    = len(tags) # Number of maps
 
+    # Compute fsky from base mask. This is used to determine covariance smoothing scales
+    base_mask = enmap.read_map(mask_fname_func(base_tag))
+    fsky = (np.sum(base_mask**2)/np.prod(base_mask.shape))*base_mask.area()/(4*np.pi)
+    print("fsky={:.2f}".format(fsky))
+    
     # Initialize Wavelets
-    uht = uharm.UHT(
-        shape, wcs, mode="curved"
-    )  # Added mode because pixell wavelets only works on curved sky maps
-    basis = wv.CosineNeedlet(lpeaks=lpeaks)
-    scales = get_scales(basis, tags, lmins, lmaxs)
+    uht  = uharm.UHT(shape, wcs,  mode="curved") 
+    basis = wv.CosineNeedlet(lpeaks = lpeaks)
+    scales = get_scales(basis,tags,lmins,lmaxs)
     nwaves = basis.n
-    wt = wv.WaveletTransform(uht, basis=basis)
+    wt = wv.WaveletTransform(uht, basis = basis)
+
+    # Compute number of tags used at each needlet scale
+    n_tag_per_scale = np.sum([np.bincount(scales[tag], minlength=basis.n) 
+                              for tag in tags], axis=0)
 
     # These will hold file names for maps, masks and covariance maps
     # for use by the Coberus coadder
     fmasks = {}
     fmaps = {}
     fcovs = {}
-    filenames = []
+
+    # Covariance smoothing
+    cov_smooth_types = ['block', 'gaussian', 'tophat']
+    assert cov_smooth_type in cov_smooth_types, f'Unrecognized covariance smoothing type.  Available options are: {", ".join(cov_smooth_types)}'
+
+    ############################################################################
+    # Determine smoothing scales
+    ############################################################################
+    # If the user does not input a set of smoothing scales for the covariance
+    # calculation, then we comptue them here. For gaussian smoothing, we compute
+    # the scales from the ILC bias tolerance (see 2307.01043). For tophat 
+    # filters, we use Eq. 13 of 2307.01258. 
+    # 
+    # In principle, these calculations should account for the fact that the 
+    # number of maps that contribute to each pixel can vary over the sky. This 
+    # would require introducing an anisotropic smoothing. Instead, we use the 
+    # total number of maps considered in the ILC at a given needlet scale.
+    # This is conservative -- it overestimates the smoothing scale needed for a 
+    # given ILC bias tolerance in regions that are only covered by a subset of 
+    # the input maps.
+    
+    if cov_smooth_scales is None:
+        if cov_smooth_type == 'gaussian':
+            print(f"Covariance smoothing scales not specified. Determining scales with ILC bias tolerance of {ilc_bias_tol}")
+            n_modes_eff = np.asarray([np.sum((2*ells+1)*basis(i, ells)**2) 
+                                    for i in range(basis.n)])*fsky
+            n_freq_eff  = n_tag_per_scale 
+
+            cov_smooth_scales = np.sqrt( 2 * abs(1+n_deproj+n_freq_eff) / (ilc_bias_tol*n_modes_eff) ) # Radians
+
+            assert all(cov_smooth_scales < np.pi), "Not enough modes to satisfy ILC bias tolerance." 
+
+        elif cov_smooth_type =='tophat':
+            # Note that this differs from Nmodes used in Gaussian smoothing. Here, we approximate the
+            # needlets as top-hats in harmonic space. The number of modes used in the Gaussian smoothing
+            
+            # Note that this implementation is slightly different than the one 
+            # in 2307.01258 (https://github.com/ACTCollaboration/NILC/blob/main/NILC/ilc.py)
+            # which uses: 
+            # n_modes_eff = np.asarray([np.sum((2*ells+1)*np.where(basis(i, ells) !=0 , 1, 0)) 
+            #                         for i in range(basis.n)]) 
+            
+            n_modes_eff = np.asarray([np.sum((2*ells+1)*basis(i, ells)**2) 
+                                    for i in range(basis.n)])*fsky
+            n_freq_eff  = n_tag_per_scale
+
+            # Eq 13 of 2307.01258
+            arccos_arg = 1. - 2. * (20 * n_freq_eff/n_modes_eff)
+            arccos_arg[arccos_arg<-1] = -1
+            cov_smooth_scales = 2*np.arccos(arccos_arg) 
+
+    else:
+        assert len(cov_smooth_scales)==nwaves, "Number of covariance smoothing scales does not match number of wavelets"
+    
+    start_time_wavelets = time.time()
 
     # Loop through arrays
-    for i, tag in enumerate(tags):
-        if imaps is None:
-            omap = enmap.read_map(
-                map_fname_func(tag)
-            )[
-                0
-            ]  # Added a [0] here to read temperature component from multi-component map.
-        else:
-            omap = imaps[i].copy()
+    for i,tag in enumerate(tags):
+        omap = enmap.read_map(map_fname_func(tag))
         if map_postprocess_func is not None:
             omap = map_postprocess_func(omap)
-        if masks is None:
-            mask = enmap.read_map(mask_fname_func(tag))
-        else:
-            mask = masks[i].copy()
+        
+        mask = enmap.read_map(mask_fname_func(tag))
         if mask_postprocess_func is not None:
             mask = mask_postprocess_func(mask)
-        if tag != base_tag:
-            omap = enmap.extract(omap, shape, wcs)
-            mask = enmap.extract(mask, shape, wcs)
+        if tag!=base_tag:
+            omap = enmap.extract(omap,shape,wcs)
+            mask = enmap.extract(mask,shape,wcs)
         else:
             base_mask = mask
 
-        omap[mask == 0] = 0
+        omap[mask==0] = 0
         print("Wavelet transform...")
         # Reconvolve to common beam
         out_beam = maps.gauss_beam(ells, out_beam_fwhm)
-        in_beam = beam_func(tag, ells)
+        in_beam = beam_func(tag,ells)
         beam_ratio = out_beam / in_beam
-        # beam_ratio = None # !!!
-        wavecs = wt.map2wave(
-            omap, fl=beam_ratio, scales=scales[tags[i]], fill_value=np.nan
-        )
-        # plot(omap,tags[i],0,mtype='input_map',colorbar=True,grid=True,ticks=10) # these are input maps
-        # smap = omap.submap(np.asarray(cutbox)*u.degree)
-        # plot(smap,tags[i],0,mtype='submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
-
-        if i == 0:
+        wavecs = wt.map2wave(omap,fl=beam_ratio,scales=scales[tags[i]],fill_value=np.nan)
+        
+        if i==0:
             # Save multimap template for final coadded map
-            owave = wavecs * 0.0
+            owave = wavecs*0.
 
         # Loop through wavelet scales
-        for j, wmap in enumerate(wavecs.maps):
-            if j not in scales[tags[i]]:
-                continue
-            # plot(wmap,tags[i],j) # these are wavelet coefficient maps
+        for j,wmap in enumerate(wavecs.maps):
+            if (j not in scales[tags[i]]): continue
             print("Projecting mask and writing wavelet map...")
             # Project masks on to wavelet map geometries
-            omask = enmap.project(mask, wmap.shape, wmap.wcs, order=0)
-            # plot(omask,tags[i],j,mtype='mask',colorbar=True) # these are wavelet coefficient maps
+            omask = enmap.project(mask,wmap.shape,wmap.wcs,order=0)
 
-            mfname = f"{out_root}/wavelet_mask_{tags[i]}_scale_{j}{io_suffix}.fits"
-            filenames.append(mfname)
+            mfname = f'{out_root}/wavelet_mask_{tags[i]}_scale_{j}.fits'
             update(fmasks, j, mfname)
-            enmap.write_map(mfname, omask)
+            enmap.write_map(mfname,omask)
 
-            wfname = f"{out_root}/wavelet_map_{tags[i]}_scale_{j}{io_suffix}.fits"
-            filenames.append(wfname)
+            wfname = f'{out_root}/wavelet_map_{tags[i]}_scale_{j}.fits'
             update(fmaps, j, wfname)
-            # print("Map MB: ",wmap.nbytes/1024/1024.)
-            enmap.write_map(wfname, wmap)
+            enmap.write_map(wfname,wmap)
 
-    ### !!!
-    theory = cosmology.default_theory()
-    ells = np.arange(lmax)
-    cls = theory.lCl("TT", ells)
-    ###
+    elapsed_time = time.time() - start_time_wavelets
+    print(f"Wavelets finished in {elapsed_time/60.:.2f} minutes.")
+
+    start_time_covariance = time.time()
 
     print("Building covariance")
     included_tags = {}
     for k in range(nwaves):
-        fcovs[k] = [[""] * len(fmaps[k]) for h in range(len(fmaps[k]))]
+
+        fcovs[k] = [[''] * len(fmaps[k]) for h in range(len(fmaps[k]))]
         # Tags to be included in wavelet scale
         itags = []
-        for i, tag in enumerate(tags):
-            if k not in scales[tag]:
-                continue
+        for i,tag in enumerate(tags):
+            if k not in scales[tag]: continue
             itags.append(tag)
         included_tags[k] = list(itags)
 
         for i in range(len(itags)):
-            for j in range(i, len(itags)):
-                print("Smoothing..")
+            wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}.fits')
+            
+            for j in range(i,len(itags)):
 
-                theory = False
-                if theory:
-                    gshape, gwcs = enmap.read_map_geometry(
-                        f"{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits"
-                    )
-                    ocls = cls.copy()
-                    ocls[ells < basis.lmins[k]] = 0
-                    ocls[ells > basis.lmaxs[k]] = 0
-                    cov = maps.field_variance(ocls) * enmap.ones(gshape, gwcs)
-                    if i == j:
-                        cov = cov + (20 * np.pi / 180.0 / 60.0) ** 2.0
-                    else:
-                        cov = cov * 0.0
-
+                if i==j: # Potentially minor speedup?
+                    wmap2 = wmap1
                 else:
-                    wmap1 = enmap.read_map(
-                        f"{out_root}/wavelet_map_{itags[i]}_scale_{k}{io_suffix}.fits"
-                    )
-                    wmap2 = enmap.read_map(
-                        f"{out_root}/wavelet_map_{itags[j]}_scale_{k}{io_suffix}.fits"
-                    )
+                    wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}.fits')
 
-                    cov = maps.block_smooth(
-                        wmap1 * wmap2, cov_smooth_factor, slow=False
-                    )  # this factor needs to be adjusted
-                    # if (k<2 or k>4)  and ('night' in itags[i]):
-                    #     io.hplot(cov,f'{out_root}/{itags[i]}_{itags[j]}_cov_{k}',downgrade=4)
+                if cov_smooth_type == 'block':
+                    cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor) # this factor needs to be adjusted
+                
+                elif cov_smooth_type == 'gaussian':
+                    # Applys Gaussian smoothing procedure from 2307.01043. 
+                    sigma_rad = cov_smooth_scales[k]
+                    
+                    if smooth_mean_cov:
+                        if fft_smooth:
+                            wmap1_smooth = enmap.smooth_gauss(wmap1, sigma_rad)
 
-                fcovname = f"{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}{io_suffix}.fits"
-                filenames.append(fcovname)
+                            if i==j:
+                                wmap2_smooth = wmap1_smooth
+                            else:
+                                wmap2_smooth = enmap.smooth_gauss(wmap2, sigma_rad)
+
+                            cov = enmap.smooth_gauss((wmap1-wmap1_smooth)*(wmap2-wmap2_smooth), sigma_rad) 
+                        
+                        else:
+                            gauss_beam = np.exp(-0.5 * ells * (ells + 1) * sigma_rad**2)
+                            wmap1_smooth = cs.filter(wmap1, gauss_beam, lmax=lmax)
+
+                            if i==j:
+                                wmap2_smooth = wmap1_smooth
+                            else:
+                                wmap2_smooth = cs.filter(wmap2, gauss_beam, lmax=lmax)
+
+                            cov = cs.filter((wmap1-wmap1_smooth)*(wmap2-wmap2_smooth), gauss_beam, lmax=lmax) 
+
+                    else:
+                        # Compute covariance without smoothing the maps. This
+                        # uses only one SHT/FFT, but is less stable than the
+                        # smooth_mean_cov_approach
+                        if fft_smooth:
+                            cov = enmap.smooth_gauss(wmap1*wmap2, sigma_rad) 
+                        else:
+                            cov = cs.filter((wmap1)*(wmap2), gauss_beam, lmax=lmax) 
+
+                elif cov_smooth_type == 'tophat':
+                    
+                    # Compute beam for top-hat smoothing procedure from 2307.01258
+                    w_rad = cov_smooth_scales[k]
+
+                    if use_annulus:
+                        w_rad_in = annulus_fwhm_ratio*w_rad
+                    else:
+                        w_rad_in = None
+
+                    tophat_beam =  compute_tophat_beam(w_rad, lmax, w_rad_in=w_rad_in)
+
+                    if smooth_mean_cov:
+                        wmap1_smooth = cs.filter(wmap1, tophat_beam, lmax=lmax)
+
+                        if i==j:
+                            wmap2_smooth = wmap1_smooth
+                        else:
+                            wmap2_smooth = cs.filter(wmap2, tophat_beam, lmax=lmax)
+
+                        cov = cs.filter((wmap1-wmap1_smooth)*(wmap2-wmap2_smooth), 
+                                        tophat_beam, lmax=lmax) 
+
+                    else:
+                        cov = cs.filter((wmap1)*(wmap2), tophat_beam, lmax=lmax) # Eq. 11
+
+                fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits'
                 fcovs[k][i][j] = fcovname
                 fcovs[k][j][i] = fcovname
-                enmap.write_map(fcovname, cov)
+                enmap.write_map(fcovname,cov)
+    
+    elapsed_time = time.time() - start_time_covariance
+    print(f"Covariance finished in {elapsed_time/60.:.2f} minutes.")
+
 
     # This part uses Coberus to do distributed Dask
     # pixel-space coadding of the maps for each
     # wavelet scale
+
+    start_time_coadd = time.time()
     for j in range(nwaves):
         print(f"Coadding scale {j}...")
         lmaps = fmaps[j]
         masks = fmasks[j]
         covs = fcovs[j]
         responses = [response_func(tag) for tag in included_tags[j]]
-        deproj_responses = [
-            [deproj_func_i(tag) for tag in included_tags[j]]
-            for deproj_func_i in deproj_response_funcs
-        ]
+
+        if n_deproj==0:
+            deproj_responses = []
+        else:
+            deproj_responses = [[deproj_func_i(tag) for tag in included_tags[j]] for deproj_func_i in deproj_response_func] # N_deproj x N_freq 
 
         coadder = Coadder(
             maps=lmaps,
             masks=masks,
             covariance_maps=covs,
             responses=responses,
-            deproj_responses=deproj_responses,
+            deproj_responses=deproj_responses
         )
 
         with Client(n_workers=n_workers) as client:
-            print("Number of workers : ", len(client.scheduler_info()["workers"]))
             # Result is a dask array
             result = coadd(client, coadder)
             # This is now a numpy array
             arr = result.compute()
-            owave.maps[j] = enmap.enmap(arr.copy(), wcs)
+            owave.maps[j] = enmap.enmap(arr.copy(),wcs)
+
+    elapsed_time = time.time() - start_time_coadd
+    print(f"Coadd finished in {elapsed_time/60.:.2f} minutes.")
+
 
     print("wave2map")
     coadd_map = wt.wave2map(owave)
-    coadd_map[base_mask == 0] = 0
+    coadd_map[base_mask==0] = 0
+
     elapsed_time = time.time() - start_time
-
-    if delete_intermediate:
-        for filename in filenames:
-            os.remove(filename)
-
     print(f"Done in {elapsed_time/60.:.2f} minutes.")
     return coadd_map
+    
