@@ -53,11 +53,11 @@ if __name__ == '__main__':
                                        out_beam_fwhm, out_root,cov_smooth_factor=args.cov_smooth_factor,
                                        mask_postprocess_func=fmproc,
                                        n_workers=args.nworkers,io_suffix=f'_data_covsmooth_{args.cov_smooth_factor}',
-                                       delete_intermediate=True)
+                                       delete_intermediate=False)['coadd']
 
 
     print(coadd_map.shape, coadd_map.wcs)
     # plot(coadd_map,"all",0,mtype='coadd',colorbar=True,grid=True,ticks=10)
     # smap = coadd_map.submap(np.asarray(cutbox)*u.degree)
     # plot(smap,"all",0,mtype='coadd_submap',colorbar=True,grid=True,ticks=0.5) # these are input maps
-    enmap.write_map(f'{out_root}/{outname}_coadd_map.fits',coadd_map)
+    enmap.write_map(f'{out_root}/{outname}_data_covsmooth_{args.cov_smooth_factor}_coadd_map.fits',coadd_map)
