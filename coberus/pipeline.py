@@ -207,7 +207,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     lmax = max(lpeaks) # Cosine needlets have zero support beyond lpeak
     ells = np.arange(lmax)
     shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
-    n_deproj = len(deproj_response_func)
+    n_deproj = len(deproj_response_func) if (deproj_response_func is not None) else 0
     n_map    = len(tags) # Number of maps
 
     # Compute fsky from base mask. This is used to determine covariance smoothing scales
