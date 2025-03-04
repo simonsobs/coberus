@@ -149,7 +149,12 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         FWHM in arcminutes for the beam of the final map
 
     out_root : str
-        Root path for outputs
+        Root path for intermediate outputs. We highly recommend
+        using a RAMdisk (/dev/shm/) if you have enough memory.
+        This will significantly speed up the code. Remember to
+        append a unique code for each job if you have multiple
+        jobs sharing memory on a node.
+        e.g. out_root = '/dev/shm/sim_1_'
 
     cov_smooth_type : optional,str
         Type of smoothing to use when constructing the covariance. Current
@@ -160,7 +165,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         smoothing.
 
     ilc_bias_tol : optional, float
-        Bias tolerance used to determine FWHM for Gaussian smoothing of
+        Bias tolerance used to determine FWHM for Gaussian smoothing
         of covariance if using Gaussian smoothing. Based on Eq. 43 of 
         2307.01043.
 
@@ -169,7 +174,8 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         option is to use SHT's.
 
     smooth_mean_cov: optional, boolean
-        If true, computes the covariance from <(A-A_smooth)(B-B_smooth)>, as
+        Only used for gaussian or top-hat smoothing.
+        If True, computes the covariance from <(A-A_smooth)(B-B_smooth)>, as
         in pyilc. Otherwise, computes the covariance from <AB>. Default is True.
         
     map_postprocess_func : optional,func
@@ -180,9 +186,6 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         
     n_workers : optional,int
         Number of workers for distributed Dask tasks
-    
-    io_suffix : optional,str
-        Suffix for intermediate outputs (different one for each simulation)
     
     delete_intermediate : optional,bool
         Whether to delete intermediate outputs
@@ -338,11 +341,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             # Project masks on to wavelet map geometries
             omask = enmap.project(mask,wmap.shape,wmap.wcs,order=0)
 
-            mfname = f'{out_root}/wavelet_mask_{tags[i]}_scale_{j}.fits'
+            mfname = f'{out_root}wavelet_mask_{tags[i]}_scale_{j}.fits'
             update(fmasks, j, mfname)
             enmap.write_map(mfname,omask)
 
-            wfname = f'{out_root}/wavelet_map_{tags[i]}_scale_{j}.fits'
+            wfname = f'{out_root}wavelet_map_{tags[i]}_scale_{j}.fits'
             update(fmaps, j, wfname)
             enmap.write_map(wfname,wmap)
             
@@ -350,7 +353,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
 
             # optional maps
             for label in nmap_labels:
-                nwfname = f'{out_root}/wavelet_{label}_{tags[i]}_scale_{j}{io_suffix}.fits'
+                nwfname = f'{out_root}wavelet_{label}_{tags[i]}_scale_{j}.fits'
                 filenames.append(nwfname)
                 update(nfmaps[label], j, nwfname)
                 enmap.write_map(nwfname,nwavecs[label].maps[j])
@@ -374,7 +377,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         included_tags[k] = list(itags)
 
         for i in range(len(itags)):
-            wmap1 = enmap.read_map(f'{out_root}/wavelet_map_{itags[i]}_scale_{k}.fits')
+            wmap1 = enmap.read_map(f'{out_root}wavelet_map_{itags[i]}_scale_{k}.fits')
             
             for j in range(i,len(itags)):
 
@@ -382,7 +385,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                 if i==j: # Potentially minor speedup?
                     wmap2 = wmap1
                 else:
-                    wmap2 = enmap.read_map(f'{out_root}/wavelet_map_{itags[j]}_scale_{k}.fits')
+                    wmap2 = enmap.read_map(f'{out_root}wavelet_map_{itags[j]}_scale_{k}.fits')
 
                 if cov_smooth_type == 'block':
                     cov = maps.block_smooth(wmap1*wmap2,cov_smooth_factor,slow=False) 
@@ -448,7 +451,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                     else:
                         cov = cs.filter((wmap1)*(wmap2), tophat_beam, lmax=lmax) # Eq. 11
 
-                fcovname = f'{out_root}/wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits'
+                fcovname = f'{out_root}wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits'
                 fcovs[k][i][j] = fcovname
                 fcovs[k][j][i] = fcovname
                 enmap.write_map(fcovname,cov)
