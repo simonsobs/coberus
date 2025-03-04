@@ -253,7 +253,8 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     # for use by the Coberus coadder
     fmasks = {}
     fmaps = {}
-    fcovs = {}filenames = []
+    fcovs = {}
+    filenames = []
     # store additional maps if desired
     if do_nmaps: nfmaps = {label: {} for label in nmap_labels}
 
