@@ -83,7 +83,7 @@ def compute_tophat_beam(w_rad, lmax, w_rad_in=None, n_theta=20000):
     if w_rad_in is not None:
         filt_ang -= 1 / ((1+(theta/w_rad_in))**6)
     
-    filt_harm = hp.sphtfunc.beam2bl(filt_ang, theta, lmax)
+    filt_harm = hp.sphtfunc.beam2bl(filt_ang, theta, int(lmax))
     filt_harm /= filt_harm[0]
     
     return filt_harm
@@ -91,7 +91,7 @@ def compute_tophat_beam(w_rad, lmax, w_rad_in=None, n_theta=20000):
 
 def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   lpeaks, lmins, lmaxs, response_func, 
-                  beam_func, out_beam_fwhm, out_root, deproj_response_func = None,
+                  beam_func, out_beam_fwhm, out_root, deproj_response_funcs = None,
                   cov_smooth_type='block', cov_smooth_factor=64, ilc_bias_tol=0.01, 
                   fft_smooth=False, smooth_mean_cov=True, cov_smooth_scales=None, 
                   use_annulus=False, annulus_fwhm_ratio=0.5, map_postprocess_func=None, 
@@ -156,6 +156,10 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         jobs sharing memory on a node.
         e.g. out_root = '/dev/shm/sim_1_'
 
+    deproj_response_funcs : list of funcs
+        List of response functions to deproject. Each function should accepts
+        the tag name and return the map response value.
+    
     cov_smooth_type : optional,str
         Type of smoothing to use when constructing the covariance. Current
         options are 'block', 'gaussian', and 'tophat'. Default value is 'block'.
@@ -210,7 +214,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     lmax = max(lpeaks) # Cosine needlets have zero support beyond lpeak
     ells = np.arange(lmax)
     shape,wcs = enmap.read_map_geometry(map_fname_func(base_tag))
-    n_deproj = len(deproj_response_func) if (deproj_response_func is not None) else 0
+    n_deproj = len(deproj_response_funcs) if (deproj_response_funcs is not None) else 0
     n_map    = len(tags) # Number of maps
 
     # Compute fsky from base mask. This is used to determine covariance smoothing scales
@@ -487,7 +491,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             if n_deproj==0:
                 deproj_responses = []
             else:
-                deproj_responses = [[deproj_func_i(tag) for tag in included_tags[j]] for deproj_func_i in deproj_response_func] # N_deproj x N_freq 
+                deproj_responses = [[deproj_func_i(tag) for tag in included_tags[j]] for deproj_func_i in deproj_response_funcs] # N_deproj x N_freq 
 
             coadder = Coadder(
                 maps=lmaps,
