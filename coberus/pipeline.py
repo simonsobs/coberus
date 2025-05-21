@@ -319,7 +319,6 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         assert len(cov_smooth_scales)==nwaves, "Number of covariance smoothing scales does not match number of wavelets"
     
     start_time_wavelets = time.time()
-
     
     # Loop through arrays
     for i,tag in enumerate(tags):
@@ -347,10 +346,12 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
             omask = enmap.project(mask,wmap.shape,wmap.wcs,order=0)
 
             mfname = f'{out_root}wavelet_mask_{tags[i]}_scale_{j}.fits'
+            filenames.append(mfname)
             update(fmasks, j, mfname)
             enmap.write_map(mfname,omask)
 
             wfname = f'{out_root}wavelet_map_{tags[i]}_scale_{j}.fits'
+            filenames.append(wfname)
             update(fmaps, j, wfname)
             enmap.write_map(wfname,wmap)
             
@@ -460,12 +461,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                 fcovs[k][i][j] = fcovname
                 fcovs[k][j][i] = fcovname
                 enmap.write_map(fcovname,cov)
+                filenames.append(fcovname)
                 totgibytes = totgibytes + (cov.nbytes/1024/1024./1024.)
                 
     elapsed_time = time.time() - start_time_covariance
     print(f"Covariance finished in {elapsed_time/60.:.2f} minutes.")
-
-    start_time_coadd = time.time()
 
     print(f"Total disk: {totgibytes:.1f} GiB")
     print(f"Free memory: {free_mem()}")
