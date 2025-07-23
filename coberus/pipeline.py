@@ -284,7 +284,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                                     for i in range(basis.n)])*fsky
             n_freq_eff  = n_tag_per_scale 
 
-            cov_smooth_scales = np.sqrt( 2 * abs(1+n_deproj+n_freq_eff) / (ilc_bias_tol*n_modes_eff) ) # Radians
+            cov_smooth_scales = np.sqrt( 2 * abs(1+n_deproj-n_freq_eff) / (ilc_bias_tol*n_modes_eff) ) # Radians
 
             assert all(cov_smooth_scales < np.pi), "Not enough modes to satisfy ILC bias tolerance." 
 
