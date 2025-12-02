@@ -96,7 +96,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   fft_smooth=False, smooth_mean_cov=True, cov_smooth_scales=None, 
                   use_annulus=False, annulus_fwhm_ratio=0.5, map_postprocess_func=None, 
                   mask_postprocess_func=None, n_workers=None,io_suffix='', delete_intermediate=False,
-                  nmap_labels=[], nmap_label_fname_func=None):
+                  nmap_labels=[], nmap_label_fname_func=None, apply_mask=False):
 
     """
     Generic function for coadding maps using an empirical
@@ -114,10 +114,15 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     ----------
 
     map_fname_func : func
-        Accepts the tag name and returns a path to the input map
+        Accepts the tag name and returns a path to the input map.
+        We recommend you mask and apodize these maps.
 
     mask_fname_func : func
-        Accepts the tag name and returns a path to the mask
+        Accepts the tag name and returns a path to *binary* masks
+        for each tag. These binary masks denote which regions of
+        each map to include in the final coadd. We recommend these
+        masks exclude regions where the apodization of the input
+        maps drops below some threshold, say 0.99.
 
     tags : list
         Ordered list of tags to coadd
@@ -202,6 +207,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         the same weights. Accepts the optional map's label and filename
         and returns a path
 
+    apply_mask : optional, boolean
+        If true, zero out regions of the input maps based on their masks.
+        This will make the maps masked sharply before wavelet transforms,
+        and is hence not recommended.
+        
 
     Returns
     -------
@@ -245,10 +255,11 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
         if itag != base_tag:
             gmap = enmap.extract(gmap,shape,wcs)
 
-        gmap[imask==0] = 0
+        if apply_mask: gmap[imask==0] = 0
         # Reconvolve to common beam
         out_beam = maps.gauss_beam(ells, out_beam_fwhm)
         in_beam = beam_func(itag,ells)
+        if in_beam.ndim!=1: raise ValueError
         beam_ratio = out_beam / in_beam
         wavecs = wt.map2wave(gmap,fl=beam_ratio,scales=scales[itag],fill_value=np.nan)
         return wavecs
