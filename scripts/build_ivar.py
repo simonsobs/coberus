@@ -23,14 +23,29 @@ def block_shape(nblocks, shape):
 def index_block(block_index, nblocks, block_shape):
     blockdim = int(np.sqrt(nblocks))
     row, col = block_index // blockdim, block_index % blockdim
-    return [(row * block_shape[0], col * block_shape[1]),
-            ((row+1) * block_shape[0], (col+1) * block_shape[1])]
+    return [(row * block_shape[-2], col * block_shape[-1]),
+            ((row+1) * block_shape[-2], (col+1) * block_shape[-1])]
 
 # apply index_block to a map
 def apply_index_block(imap, coords_obj):
     [top_left, bottom_right] = coords_obj
-    return imap[top_left[0]:bottom_right[0],
-                top_left[1]:bottom_right[1]] 
+    return imap[..., top_left[0]:bottom_right[0],
+                     top_left[1]:bottom_right[1]] 
+
+# safe SHTs and filtering
+def filter_map(imap, mask, lmin, lmax, mlmax, grow=0.5):
+    # grow mask and apodize
+    gmask = enmap.enmap(np.array(mask), mask.wcs)
+    gmask[mask < 0.5] = 0.
+    gmask[mask >= 0.5] = 1.
+    gmask = enmap.cosine_apodize(1 - maps.grow_mask(gmask, grow),
+                                 grow)
+    ialm = cs.map2alm(imap * gmask, spin=0, lmax=mlmax)
+    ialm = cs.almxfl(ialm, lambda ell: 1.0 if lmin <= ell <= lmax else 0.)
+    omap = cs.alm2map(ialm, enmap.empty(imap.shape, imap.wcs), lmax=mlmax)
+    omap[mask < 0.5] = 0.
+    omap[mask >= 0.5] = 1.
+    return omap
 
 # return {idx: [(top left pixel coords, bottom right pixel coords)],
 #         idx2: ...}
@@ -46,16 +61,21 @@ def stitch(all_blocks):
     block_shape = np.array(all_blocks[0]).shape
     print("Block shape: ", block_shape)
     # build full matrix at once
-    imap = np.zeros((block_shape[0] * blockdim,
-                     block_shape[1] * blockdim))
+    if len(block_shape) == 3:
+        imap = np.zeros((block_shape[0],
+                         block_shape[-2] * blockdim,
+                         block_shape[-1] * blockdim))
+    else:
+        imap = np.zeros((block_shape[-2] * blockdim,
+                        block_shape[-1] * blockdim))
     
     # and fill in block by block
     for block_index in range(nblocks):
         row, col = block_index // blockdim, block_index % blockdim
         block = np.array(all_blocks[block_index])
 
-        imap[row*block_shape[0]:(row+1)*block_shape[0],
-             col*block_shape[1]:(col+1)*block_shape[1]] = block
+        imap[..., row*block_shape[-2]:(row+1)*block_shape[-2],
+             col*block_shape[-1]:(col+1)*block_shape[-1]] = block
     return imap
 
 if __name__ == '__main__':
@@ -70,11 +90,23 @@ if __name__ == '__main__':
     parser.add_argument("--sim-max", type=int, default=400, help="Maximum sim index")
     parser.add_argument("--chunks", type=int, default=64,
                         help="Number of chunks (preferably perfect squares)")
-    parser.add_argument("--verbose", type=store_true, default=True, help="Verbose outputs")
-
+    parser.add_argument("--verbose", action="store_true", default=True, help="Verbose outputs")
+    parser.add_argument("--path-to-mask", type=str, default=None, help="Path to mask")
+    parser.add_argument("--filter-lmin", type=int, default=0, help="Lmin for tophat filtering (default 0)")
+    parser.add_argument("--filter-lmax", type=int, default=5400, help="Lmax for tophat filtering (default 5400)")
+    parser.add_argument("--mlmax", type=int, default=6000, help="mlmax for SHTs")
     args = parser.parse_args()
+
+    if ".fits" not in args.out_name: args.out_name += ".fits"
     
     all_blocks = {}
+
+    if args.path_to_mask is not None:
+        mask = enmap.read_map(args.path_to_mask)
+        mask = enmap.downgrade(mask, 2)
+    else:
+        mask = None
+
     # save wcs somewhere
     wcs = None
     for chunk in range(args.chunks):
@@ -83,20 +115,21 @@ if __name__ == '__main__':
         for sim_index in range(args.sim_min, args.sim_max+1):
             if args.verbose:
                 print(f"-- Sim #{sim_index} / {args.sim_max-args.sim_min+1}: ", end="")
-            sim_path = args.sim_path.replace(args.token, str(sim_index))
+            sim_path = args.sim_path.replace(args.token, str(sim_index).zfill(len(args.token)))
             try:
                 imap_full = enmap.read_map(sim_path)
+                #imap_full = filter_map(imap_full, mask, args.filter_lmin,
+                #                       args.filter_lmax, args.mlmax)
                 wcs = imap_full.wcs
                 if args.verbose: print(f"Loaded from {sim_path}.")
             except FileNotFoundError:
-                    if args.verbose: print(f"Could not find {sim_path}. Skipping.")
+                if args.verbose: print(f"Could not find {sim_path}. Skipping.")
                 continue
             
-
             shape = block_shape(args.chunks, imap_full.shape)
             if args.verbose and sim_index == args.sim_min:
-                print(f"Full shape: ({imap_full.shape[0]}, {imap_full.shape[1]})")
-                print(f"Block shape: ({shape[0]}, {shape[1]})")
+                print(f"Full shape: ({imap_full.shape})")
+                print(f"Block shape: ({shape})")
             imap_coords = index_block(chunk, args.chunks, shape)
             chunk_full = np.copy(apply_index_block(imap_full, imap_coords))
             del imap_full
@@ -110,5 +143,5 @@ if __name__ == '__main__':
     # stitch blocks, and then take inverse for ivar map
     omap = enmap.enmap(1. / stitch(all_blocks), wcs=wcs)
     # write to disk
-    enmap.write_map(args.out_name + ".fits", omap)
-    print(f"Wrote output to {args.out_name}.fits.") 
+    enmap.write_map(args.out_name, omap)
+    print(f"Wrote output to {args.out_name}") 
