@@ -484,35 +484,35 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     outmaptypes = ['coadd'] + [label + '_coadd' for label in nmap_labels]
     outmaps = {}
 
-    for outmaptype in outmaptypes:
-        # This part uses Coberus to do distributed Dask
-        # pixel-space coadding of the maps for each
-        # wavelet scale
-        for j in range(nwaves):
-            print(f"Coadding {outmaptype} scale {j}...")
-            if outmaptype == 'coadd':
-                lmaps = fmaps[j]
-            else:
-                lmaps = nfmaps[outmaptype[:-6]][j]
+    with Client(n_workers=n_workers) as client:
+        for outmaptype in outmaptypes:
+            # This part uses Coberus to do distributed Dask
+            # pixel-space coadding of the maps for each
+            # wavelet scale
+            for j in range(nwaves):
+                print(f"Coadding {outmaptype} scale {j}...")
+                if outmaptype == 'coadd':
+                    lmaps = fmaps[j]
+                else:
+                    lmaps = nfmaps[outmaptype[:-6]][j]
 
-            masks = fmasks[j]
-            covs = fcovs[j]
-            responses = [response_func(tag) for tag in included_tags[j]]
-            
-            if n_deproj==0:
-                deproj_responses = []
-            else:
-                deproj_responses = [[deproj_func_i(tag) for tag in included_tags[j]] for deproj_func_i in deproj_response_funcs] # N_deproj x N_freq 
+                masks = fmasks[j]
+                covs = fcovs[j]
+                responses = [response_func(tag) for tag in included_tags[j]]
 
-            coadder = Coadder(
-                maps=lmaps,
-                masks=masks,
-                covariance_maps=covs,
-                responses=responses,
-                deproj_responses=deproj_responses
-            )
+                if n_deproj==0:
+                    deproj_responses = []
+                else:
+                    deproj_responses = [[deproj_func_i(tag) for tag in included_tags[j]] for deproj_func_i in deproj_response_funcs] # N_deproj x N_freq 
 
-            with Client(n_workers=n_workers) as client:
+                coadder = Coadder(
+                    maps=lmaps,
+                    masks=masks,
+                    covariance_maps=covs,
+                    responses=responses,
+                    deproj_responses=deproj_responses
+                )
+
                 print("Number of workers: ", len(client.scheduler_info()['workers']))
                 # Result is a dask array
                 result = coadd(client, coadder)
@@ -520,9 +520,9 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                 arr = result.compute()
                 owave.maps[j] = enmap.enmap(arr.copy(),wcs)
 
-        coadd_map = wt.wave2map(owave)
-        coadd_map[base_mask==0] = 0
-        outmaps[outmaptype] = coadd_map.copy()
+            coadd_map = wt.wave2map(owave)
+            coadd_map[base_mask==0] = 0
+            outmaps[outmaptype] = coadd_map.copy()
 
     
     print(f"Free memory: {free_mem()}")
