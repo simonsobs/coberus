@@ -5,6 +5,7 @@ from orphics import io,maps
 from coberus import Coadder, coadd
 from coberus import pipeline
 from dask.distributed import Client
+from contextlib import nullcontext
 import healpy as hp
 
 import time, psutil
@@ -95,7 +96,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                   cov_smooth_type='block', cov_smooth_factor=64, ilc_bias_tol=0.01, 
                   fft_smooth=False, smooth_mean_cov=True, cov_smooth_scales=None, 
                   use_annulus=False, annulus_fwhm_ratio=0.5, map_postprocess_func=None, 
-                  mask_postprocess_func=None, n_workers=None,io_suffix='', delete_intermediate=False,
+                  mask_postprocess_func=None, client=None, n_workers=None,io_suffix='', delete_intermediate=False,
                   nmap_labels=[], nmap_label_fname_func=None, apply_mask=False):
 
     """
@@ -484,7 +485,8 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
     outmaptypes = ['coadd'] + [label + '_coadd' for label in nmap_labels]
     outmaps = {}
 
-    with Client(n_workers=n_workers) as client:
+    client_ctx = Client(n_workers=n_workers) if client is None else nullcontext(client)
+    with client_ctx as client:
         for outmaptype in outmaptypes:
             # This part uses Coberus to do distributed Dask
             # pixel-space coadding of the maps for each
@@ -518,7 +520,7 @@ def needlet_coadd(map_fname_func, mask_fname_func, tags, base_tag,
                 result = coadd(client, coadder)
                 # This is now a numpy array
                 arr = result.compute()
-                owave.maps[j] = enmap.enmap(arr.copy(),wcs)
+                owave.maps[j] = enmap.enmap(arr.copy(), owave.maps[j].wcs)
 
             coadd_map = wt.wave2map(owave)
             coadd_map[base_mask==0] = 0
