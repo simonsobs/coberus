@@ -1,5 +1,0 @@
-planck_root: "/gpfs/fs0/project/r/rbond/sigurdkn/actpol/planck/npipe/fejer1_equ/"
-act_root: "/gpfs/fs0/project/r/rbond/sigurdkn/actpol/maps/dr6v4_20230316/release/"
-out_root: "/data5/depot/needlets/proto/"
-mask_root: "/gpfs/fs0/project/r/rbond/msyriac/masks/dr6v4_lensing_20240919b_masks/baseline/"
-sim_root: "/scratch/r/rbond/msyriac/data/sims/alex/v0.4/"
