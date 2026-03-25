@@ -143,7 +143,7 @@ coadd_map = result['coadd']
 - **`nmap_labels` / `nmap_label_fname_func`** — coadd additional maps (e.g. simulations) using weights derived from the data maps; results returned as `result['<label>_coadd']`.
 - **`delete_intermediate=True`** — clean up wavelet/covariance files after completion.
 
-See `test_notebook.ipynb` for a complete worked example with simulated CMB maps.
+See `examples/example_notebook.ipynb` for a complete worked example with simulated CMB maps.
 
 
 #### Naming
