@@ -9,21 +9,42 @@ import healpy as hp
 import time
 import psutil
 
-def gauss_beam(ell,fwhm):
-    tht_fwhm = np.deg2rad(fwhm / 60.)
-    return np.exp(-(tht_fwhm**2.)*(ell**2.) / (16.*np.log(2.)))
 
-def block_smooth(imap,factor,slow=False):
-    """Smooth maps with block downgrading and projection
-    back to original geometry
+def gauss_beam(ell, fwhm):
     """
-    downed = enmap.downgrade(imap, factor, inclusive=True,op=np.nanmean)
+    Compute Gaussian beam window function $B_\ell$ for FWHM in arcminutes.
+
+    Args:
+        ell: Multipole moment(s) (float or ndarray).
+        fwhm: Beam Full Width at Half Maximum in arcminutes.
+
+    Returns:
+        The beam attenuation factor $\exp(-\ell^2 \theta_{fwhm}^2 / (16 \ln 2))$.
+    """
+    tht_fwhm = np.deg2rad(fwhm / 60.0)
+    return np.exp(-(tht_fwhm**2.0) * (ell**2.0) / (16.0 * np.log(2.0)))
+
+
+def block_smooth(imap, factor, slow=False):
+    """
+    Smooth an enmap by block-averaging and resampling to the original geometry.
+
+    Args:
+        imap: Input enmap.
+        factor: Integer block-downscaling factor.
+        slow: If True, uses enmap.project; otherwise uses enmap.upgrade.
+
+    Returns:
+        The resampled enmap with original shape and WCS.
+    """
+    downed = enmap.downgrade(imap, factor, inclusive=True, op=np.nanmean)
     downed[np.isnan(downed)] = 0
     if slow:
-        omap = enmap.project(downed,imap.shape,imap.wcs,order=0)
+        omap = enmap.project(downed, imap.shape, imap.wcs, order=0)
     else:
-        omap = enmap.upgrade(downed,factor,inclusive=True,oshape=imap.shape)
+        omap = enmap.upgrade(downed, factor, inclusive=True, oshape=imap.shape)
     return omap
+
 
 def free_mem():
     return f"{psutil.virtual_memory()[1] / 1024 / 1024 / 1024:.1f} GiB"
@@ -263,7 +284,8 @@ def needlet_coadd(
        The final coadded map.
 
     """
-    if nmap_labels is None: nmap_labels = []
+    if nmap_labels is None:
+        nmap_labels = []
     start_time = time.time()
     lmax = max(lpeaks)  # Cosine needlets have zero support beyond lpeak
     ells = np.arange(lmax)
@@ -305,7 +327,7 @@ def needlet_coadd(
         if apply_mask:
             gmap[imask == 0] = 0
         # Reconvolve to common beam
-        out_beam = maps.gauss_beam(ells, out_beam_fwhm)
+        out_beam = gauss_beam(ells, out_beam_fwhm)
         in_beam = beam_func(itag, ells)
         if in_beam.ndim != 1:
             raise ValueError
@@ -486,9 +508,7 @@ def needlet_coadd(
                     )
 
                 if cov_smooth_type == "block":
-                    cov = maps.block_smooth(
-                        wmap1 * wmap2, cov_smooth_factor, slow=False
-                    )
+                    cov = block_smooth(wmap1 * wmap2, cov_smooth_factor, slow=False)
 
                 elif cov_smooth_type == "gaussian":
                     # Applies Gaussian smoothing procedure from 2307.01043.
