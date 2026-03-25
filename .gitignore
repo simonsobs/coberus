@@ -165,3 +165,7 @@ cython_debug/
 *.fits
 *.npy
 *.png
+
+slurm*.sh
+slurm*.txt
+*_local.yaml
