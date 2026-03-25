@@ -1,14 +1,14 @@
-from pixell import enmap, curvedsky as cs, wavelets as wv, uharm, multimap, utils as u
+from pixell import enmap, curvedsky as cs, wavelets as wv, uharm
 import numpy as np
-import os, sys
-from orphics import io, maps
+import os
+from orphics import maps
 from coberus import Coadder, coadd
-from coberus import pipeline
 from dask.distributed import Client
 from contextlib import nullcontext
 import healpy as hp
 
-import time, psutil
+import time
+import psutil
 
 
 def free_mem():
@@ -254,7 +254,6 @@ def needlet_coadd(
     ells = np.arange(lmax)
     shape, wcs = enmap.read_map_geometry(map_fname_func(base_tag))
     n_deproj = len(deproj_response_funcs) if (deproj_response_funcs is not None) else 0
-    n_map = len(tags)  # Number of maps
 
     # Compute fsky from base mask. This is used to determine covariance smoothing scales
     base_mask = enmap.read_map(mask_fname_func(base_tag))
