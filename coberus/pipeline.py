@@ -1,7 +1,6 @@
 from pixell import enmap, curvedsky as cs, wavelets as wv, uharm
 import numpy as np
 import os
-from orphics import maps
 from coberus import Coadder, coadd
 from dask.distributed import Client
 from contextlib import nullcontext
@@ -10,6 +9,21 @@ import healpy as hp
 import time
 import psutil
 
+def gauss_beam(ell,fwhm):
+    tht_fwhm = np.deg2rad(fwhm / 60.)
+    return np.exp(-(tht_fwhm**2.)*(ell**2.) / (16.*np.log(2.)))
+
+def block_smooth(imap,factor,slow=False):
+    """Smooth maps with block downgrading and projection
+    back to original geometry
+    """
+    downed = enmap.downgrade(imap, factor, inclusive=True,op=np.nanmean)
+    downed[np.isnan(downed)] = 0
+    if slow:
+        omap = enmap.project(downed,imap.shape,imap.wcs,order=0)
+    else:
+        omap = enmap.upgrade(downed,factor,inclusive=True,oshape=imap.shape)
+    return omap
 
 def free_mem():
     return f"{psutil.virtual_memory()[1] / 1024 / 1024 / 1024:.1f} GiB"
