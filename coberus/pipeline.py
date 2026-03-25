@@ -122,6 +122,97 @@ def compute_tophat_beam(w_rad, lmax, w_rad_in=None, n_theta=20000):
     return filt_harm
 
 
+# Helper function for covariance smoothing
+def cov_smooth(
+    wmap1,
+    wmap2,
+    i,
+    j,
+    cov_smooth_type,
+    cov_smooth_factor,
+    sigma_rad,
+    smooth_mean_cov,
+    fft_smooth,
+    lmax,
+    ells,
+    use_annulus,
+    annulus_fwhm_ratio,
+):
+
+    if cov_smooth_type == "block":
+        cov = block_smooth(wmap1 * wmap2, cov_smooth_factor, slow=False)
+
+    elif cov_smooth_type == "gaussian":
+        # Applies Gaussian smoothing procedure from 2307.01043.
+
+        if smooth_mean_cov:
+            if fft_smooth:
+                wmap1_smooth = enmap.smooth_gauss(wmap1, sigma_rad)
+
+                if i == j:
+                    wmap2_smooth = wmap1_smooth
+                else:
+                    wmap2_smooth = enmap.smooth_gauss(wmap2, sigma_rad)
+
+                cov = enmap.smooth_gauss(
+                    (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
+                    sigma_rad,
+                )
+
+            else:
+                gauss_beam = np.exp(-0.5 * ells * (ells + 1) * sigma_rad**2)
+                wmap1_smooth = cs.filter(wmap1, gauss_beam, lmax=lmax)
+
+                if i == j:
+                    wmap2_smooth = wmap1_smooth
+                else:
+                    wmap2_smooth = cs.filter(wmap2, gauss_beam, lmax=lmax)
+
+                cov = cs.filter(
+                    (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
+                    gauss_beam,
+                    lmax=lmax,
+                )
+
+        else:
+            # Compute covariance without smoothing the maps. This
+            # uses only one SHT/FFT, but is less stable than the
+            # smooth_mean_cov_approach
+            if fft_smooth:
+                cov = enmap.smooth_gauss(wmap1 * wmap2, sigma_rad)
+            else:
+                cov = cs.filter((wmap1) * (wmap2), gauss_beam, lmax=lmax)
+
+    elif cov_smooth_type == "tophat":
+        # Compute beam for top-hat smoothing procedure from 2307.01258
+        w_rad = sigma_rad
+
+        if use_annulus:
+            w_rad_in = annulus_fwhm_ratio * w_rad
+        else:
+            w_rad_in = None
+
+        tophat_beam = compute_tophat_beam(w_rad, lmax, w_rad_in=w_rad_in)
+
+        if smooth_mean_cov:
+            wmap1_smooth = cs.filter(wmap1, tophat_beam, lmax=lmax)
+
+            if i == j:
+                wmap2_smooth = wmap1_smooth
+            else:
+                wmap2_smooth = cs.filter(wmap2, tophat_beam, lmax=lmax)
+
+            cov = cs.filter(
+                (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
+                tophat_beam,
+                lmax=lmax,
+            )
+
+        else:
+            cov = cs.filter((wmap1) * (wmap2), tophat_beam, lmax=lmax)  # Eq. 11
+    return cov
+
+
 def needlet_coadd(
     map_fname_func,
     mask_fname_func,
@@ -498,80 +589,21 @@ def needlet_coadd(
                         f"{out_root}wavelet_map_{itags[j]}_scale_{k}.fits"
                     )
 
-                if cov_smooth_type == "block":
-                    cov = block_smooth(wmap1 * wmap2, cov_smooth_factor, slow=False)
-
-                elif cov_smooth_type == "gaussian":
-                    # Applies Gaussian smoothing procedure from 2307.01043.
-                    sigma_rad = cov_smooth_scales[k]
-
-                    if smooth_mean_cov:
-                        if fft_smooth:
-                            wmap1_smooth = enmap.smooth_gauss(wmap1, sigma_rad)
-
-                            if i == j:
-                                wmap2_smooth = wmap1_smooth
-                            else:
-                                wmap2_smooth = enmap.smooth_gauss(wmap2, sigma_rad)
-
-                            cov = enmap.smooth_gauss(
-                                (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
-                                sigma_rad,
-                            )
-
-                        else:
-                            gauss_beam = np.exp(-0.5 * ells * (ells + 1) * sigma_rad**2)
-                            wmap1_smooth = cs.filter(wmap1, gauss_beam, lmax=lmax)
-
-                            if i == j:
-                                wmap2_smooth = wmap1_smooth
-                            else:
-                                wmap2_smooth = cs.filter(wmap2, gauss_beam, lmax=lmax)
-
-                            cov = cs.filter(
-                                (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
-                                gauss_beam,
-                                lmax=lmax,
-                            )
-
-                    else:
-                        # Compute covariance without smoothing the maps. This
-                        # uses only one SHT/FFT, but is less stable than the
-                        # smooth_mean_cov_approach
-                        if fft_smooth:
-                            cov = enmap.smooth_gauss(wmap1 * wmap2, sigma_rad)
-                        else:
-                            cov = cs.filter((wmap1) * (wmap2), gauss_beam, lmax=lmax)
-
-                elif cov_smooth_type == "tophat":
-                    # Compute beam for top-hat smoothing procedure from 2307.01258
-                    w_rad = cov_smooth_scales[k]
-
-                    if use_annulus:
-                        w_rad_in = annulus_fwhm_ratio * w_rad
-                    else:
-                        w_rad_in = None
-
-                    tophat_beam = compute_tophat_beam(w_rad, lmax, w_rad_in=w_rad_in)
-
-                    if smooth_mean_cov:
-                        wmap1_smooth = cs.filter(wmap1, tophat_beam, lmax=lmax)
-
-                        if i == j:
-                            wmap2_smooth = wmap1_smooth
-                        else:
-                            wmap2_smooth = cs.filter(wmap2, tophat_beam, lmax=lmax)
-
-                        cov = cs.filter(
-                            (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
-                            tophat_beam,
-                            lmax=lmax,
-                        )
-
-                    else:
-                        cov = cs.filter(
-                            (wmap1) * (wmap2), tophat_beam, lmax=lmax
-                        )  # Eq. 11
+                cov = cov_smooth(
+                    wmap1,
+                    wmap2,
+                    i,
+                    j,
+                    cov_smooth_type,
+                    cov_smooth_factor,
+                    cov_smooth_scales[k],
+                    smooth_mean_cov,
+                    fft_smooth,
+                    lmax,
+                    ells,
+                    use_annulus,
+                    annulus_fwhm_ratio,
+                )
 
                 fcovname = f"{out_root}wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits"
                 fcovs[k][i][j] = fcovname
