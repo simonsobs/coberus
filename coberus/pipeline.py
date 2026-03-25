@@ -137,7 +137,7 @@ def needlet_coadd(
     n_workers=None,
     io_suffix="",
     delete_intermediate=False,
-    nmap_labels=[],
+    nmap_labels=None,
     nmap_label_fname_func=None,
     apply_mask=False,
 ):
@@ -263,6 +263,7 @@ def needlet_coadd(
        The final coadded map.
 
     """
+    if nmap_labels is None: nmap_labels = []
     start_time = time.time()
     lmax = max(lpeaks)  # Cosine needlets have zero support beyond lpeak
     ells = np.arange(lmax)
