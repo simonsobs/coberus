@@ -5,7 +5,7 @@ from coberus import Coadder, coadd
 from dask.distributed import Client
 from contextlib import nullcontext
 import healpy as hp
-
+from collections import defaultdict
 import time
 import psutil
 
@@ -78,15 +78,6 @@ def get_scales(basis, tags, ellmins, ellmaxs):
                 continue
             scales[tag].append(i)
     return scales
-
-
-# Helper for dictionaries
-def update(d, key, item):
-    try:
-        d[key]
-    except KeyError:
-        d[key] = []
-    d[key].append(item)
 
 
 def compute_tophat_beam(w_rad, lmax, w_rad_in=None, n_theta=20000):
@@ -339,13 +330,13 @@ def needlet_coadd(
 
     # These will hold file names for maps, masks and covariance maps
     # for use by the Coberus coadder
-    fmasks = {}
-    fmaps = {}
+    fmasks = defaultdict(list)
+    fmaps = defaultdict(list)
     fcovs = {}
     filenames = []
     # store additional maps if desired
     if do_nmaps:
-        nfmaps = {label: {} for label in nmap_labels}
+        nfmaps = {label: defaultdict(list) for label in nmap_labels}
 
     print(f"Free memory: {free_mem()}")
     totgibytes = 0.0
@@ -461,12 +452,12 @@ def needlet_coadd(
 
             mfname = f"{out_root}wavelet_mask_{tags[i]}_scale_{j}.fits"
             filenames.append(mfname)
-            update(fmasks, j, mfname)
+            fmasks[j].append(mfname)
             enmap.write_map(mfname, omask)
 
             wfname = f"{out_root}wavelet_map_{tags[i]}_scale_{j}.fits"
             filenames.append(wfname)
-            update(fmaps, j, wfname)
+            fmaps[j].append(wfname)
             enmap.write_map(wfname, wmap)
 
             totgibytes = totgibytes + (wmap.nbytes / 1024 / 1024.0 / 1024.0 * 2.0)
@@ -475,7 +466,7 @@ def needlet_coadd(
             for label in nmap_labels:
                 nwfname = f"{out_root}wavelet_{label}_{tags[i]}_scale_{j}.fits"
                 filenames.append(nwfname)
-                update(nfmaps[label], j, nwfname)
+                nfmaps[label][j].append(nwfname)
                 enmap.write_map(nwfname, nwavecs[label].maps[j])
                 totgibytes = totgibytes + (wmap.nbytes / 1024 / 1024.0 / 1024.0)
 
