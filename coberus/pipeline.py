@@ -589,6 +589,11 @@ def needlet_coadd(
                         f"{out_root}wavelet_map_{itags[j]}_scale_{k}.fits"
                     )
 
+                if cov_smooth_type == "block":
+                    sigma_rad = None
+                else:
+                    sigma_rad = cov_smooth_scales[k]
+
                 cov = cov_smooth(
                     wmap1,
                     wmap2,
@@ -596,7 +601,7 @@ def needlet_coadd(
                     j,
                     cov_smooth_type,
                     cov_smooth_factor,
-                    cov_smooth_scales[k],
+                    sigma_rad,
                     smooth_mean_cov,
                     fft_smooth,
                     lmax,
