@@ -224,8 +224,8 @@ def needlet_coadd(
     beam_func,
     out_beam_fwhm,
     out_root,
-    out_shape=None,
-    out_wcs=None,
+    oshape=None,
+    owcs=None,
     deproj_response_funcs=None,
     cov_smooth_type="block",
     cov_smooth_factor=64,
@@ -308,14 +308,14 @@ def needlet_coadd(
         jobs sharing memory on a node.
         e.g. out_root = '/dev/shm/sim_1_'
 
-    out_shape : optional, tuple
-        Shape of the output map geometry. If both out_shape and out_wcs are
+    oshape : optional, tuple
+        Shape of the output map geometry. If both oshape and owcs are
         provided (e.g. a downgraded version of the base_tag geometry), the
         final coadded map(s) are reconstructed onto this geometry. If either
         is None, the output geometry defaults to the base_tag geometry.
 
-    out_wcs : optional, astropy.wcs.WCS
-        WCS of the output map geometry. See out_shape.
+    owcs : optional, astropy.wcs.WCS
+        WCS of the output map geometry. See oshape.
 
     deproj_response_funcs : list of funcs
         List of response functions to deproject. Each function should accepts
@@ -418,11 +418,11 @@ def needlet_coadd(
     # Optional separate output geometry (e.g. a downgrade of base_tag). Only
     # the final wave2map reconstruction uses this; per-scale wavelet
     # geometries and the wavelet-domain coadd are unchanged.
-    if (out_shape is None) or (out_wcs is None):
+    if (out_shape is None) or (owcs is None):
         wt_out = wt
-        out_shape, out_wcs = shape, wcs
+        out_shape, owcs = shape, wcs
     else:
-        uht_out = uharm.UHT(out_shape, out_wcs, mode="curved")
+        uht_out = uharm.UHT(out_shape, owcs, mode="curved")
         wt_out = wv.WaveletTransform(uht_out, basis=basis)
 
     # Compute number of tags used at each needlet scale
@@ -663,7 +663,7 @@ def needlet_coadd(
     if wt_out is wt:
         out_base_mask = base_mask
     else:
-        out_base_mask = enmap.project(base_mask, out_shape, out_wcs, order=0)
+        out_base_mask = enmap.project(base_mask, oshape, owcs, order=0)
 
     outmaptypes = ["coadd"] + [label + "_coadd" for label in nmap_labels]
     outmaps = {}
