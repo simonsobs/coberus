@@ -418,11 +418,11 @@ def needlet_coadd(
     # Optional separate output geometry (e.g. a downgrade of base_tag). Only
     # the final wave2map reconstruction uses this; per-scale wavelet
     # geometries and the wavelet-domain coadd are unchanged.
-    if (out_shape is None) or (owcs is None):
+    if (oshape is None) or (owcs is None):
         wt_out = wt
-        out_shape, owcs = shape, wcs
+        oshape, owcs = shape, wcs
     else:
-        uht_out = uharm.UHT(out_shape, owcs, mode="curved")
+        uht_out = uharm.UHT(oshape, owcs, mode="curved")
         wt_out = wv.WaveletTransform(uht_out, basis=basis)
 
     # Compute number of tags used at each needlet scale
