@@ -138,7 +138,6 @@ def cov_smooth(
     use_annulus,
     annulus_fwhm_ratio,
 ):
-
     if cov_smooth_type == "block":
         cov = block_smooth(wmap1 * wmap2, cov_smooth_factor, slow=False)
 
@@ -225,6 +224,8 @@ def needlet_coadd(
     beam_func,
     out_beam_fwhm,
     out_root,
+    oshape=None,
+    owcs=None,
     deproj_response_funcs=None,
     cov_smooth_type="block",
     cov_smooth_factor=64,
@@ -307,6 +308,15 @@ def needlet_coadd(
         jobs sharing memory on a node.
         e.g. out_root = '/dev/shm/sim_1_'
 
+    oshape : optional, tuple
+        Shape of the output map geometry. If both oshape and owcs are
+        provided (e.g. a downgraded version of the base_tag geometry), the
+        final coadded map(s) are reconstructed onto this geometry. If either
+        is None, the output geometry defaults to the base_tag geometry.
+
+    owcs : optional, astropy.wcs.WCS
+        WCS of the output map geometry. See oshape.
+
     deproj_response_funcs : list of funcs
         List of response functions to deproject. Each function should accepts
         the tag name and return the map response value.
@@ -359,15 +369,30 @@ def needlet_coadd(
         and is hence not recommended.
 
 
+
     Returns
     -------
 
-    coadd_map : ndmap
-       The final coadded map.
+    outmaps : dict
+        Dictionary of output ndmaps. Always contains:
+          'coadd' : final coadded map on the output geometry.
+          'mask'  : the final footprint mask (the base_tag mask, projected
+                    onto the output geometry when one is provided).
+        For each label in nmap_labels, also contains '{label}_coadd' with the
+        coadd of those maps using the same weights.
 
     """
     if nmap_labels is None:
         nmap_labels = []
+
+    # Sanity check that the output dictionary keys we will produce are unique
+    _output_keys = ["coadd"] + [f"{label}_coadd" for label in nmap_labels] + ["mask"]
+    if len(_output_keys) != len(set(_output_keys)):
+        raise ValueError(
+            f"Duplicate keys would be produced in output dictionary: {_output_keys}. "
+            "Check nmap_labels for collisions with 'coadd' or 'mask'."
+        )
+
     start_time = time.time()
     lmax = max(lpeaks)  # Cosine needlets have zero support beyond lpeak
     ells = np.arange(lmax)
@@ -389,6 +414,16 @@ def needlet_coadd(
     scales = get_scales(basis, tags, lmins, lmaxs)
     nwaves = basis.n
     wt = wv.WaveletTransform(uht, basis=basis)
+
+    # Optional separate output geometry (e.g. a downgrade of base_tag). Only
+    # the final wave2map reconstruction uses this; per-scale wavelet
+    # geometries and the wavelet-domain coadd are unchanged.
+    if (oshape is None) or (owcs is None):
+        wt_out = wt
+        oshape, owcs = shape, wcs
+    else:
+        uht_out = uharm.UHT(oshape, owcs, mode="curved")
+        wt_out = wv.WaveletTransform(uht_out, basis=basis)
 
     # Compute number of tags used at each needlet scale
     n_tag_per_scale = np.sum(
@@ -623,6 +658,13 @@ def needlet_coadd(
     print(f"Total disk: {totgibytes:.1f} GiB")
     print(f"Free memory: {free_mem()}")
 
+    # Project the final footprint mask onto the output geometry (no-op when
+    # output geometry equals the base_tag geometry).
+    if wt_out is wt:
+        out_base_mask = base_mask
+    else:
+        out_base_mask = enmap.project(base_mask, oshape, owcs, order=0)
+
     outmaptypes = ["coadd"] + [label + "_coadd" for label in nmap_labels]
     outmaps = {}
 
@@ -666,11 +708,12 @@ def needlet_coadd(
                 arr = result.compute()
                 owave.maps[j] = enmap.enmap(arr.copy(), owave.maps[j].wcs)
 
-            coadd_map = wt.wave2map(owave)
-            coadd_map[base_mask == 0] = 0
+            coadd_map = wt_out.wave2map(owave)
+            coadd_map[out_base_mask == 0] = 0
             outmaps[outmaptype] = coadd_map.copy()
 
     print(f"Free memory: {free_mem()}")
+    outmaps["mask"] = out_base_mask
     if delete_intermediate:
         for filename in filenames:
             os.remove(filename)
