@@ -1,4 +1,4 @@
-from pixell import enmap, curvedsky as cs, wavelets as wv, uharm
+from pixell import enmap, curvedsky as cs, wavelets as wv, uharm, wcsutils
 import numpy as np
 import os
 from coberus import Coadder, coadd
@@ -211,6 +211,16 @@ def cov_smooth(
             cov = cs.filter((wmap1) * (wmap2), tophat_beam, lmax=lmax)  # Eq. 11
     return cov
 
+
+def project_mask(imask, oshape, owcs, threshold=0.99):
+    """Safely reproject a binary mask, keeping the result 0/1.
+    If the geometries are pixel-compatible, use enmap.extract, which copies
+    values exactly with no interpolation. Otherwise bilinear-project and
+    re-binarize.
+    """
+    if wcsutils.is_compatible(imask.wcs, owcs):
+        return enmap.extract(imask, oshape, owcs)
+    return 1.0 * (enmap.project(imask, oshape, owcs, order=1) > threshold)
 
 def needlet_coadd(
     map_fname_func,
@@ -574,7 +584,7 @@ def needlet_coadd(
                 continue
             print("Projecting mask and writing wavelet map...")
             # Project masks on to wavelet map geometries
-            omask = enmap.project(mask, wmap.shape, wmap.wcs, order=0)
+            omask = project_mask(mask, wmap.shape, wmap.wcs)
 
             mfname = f"{out_root}wavelet_mask_{tags[i]}_scale_{j}.fits"
             filenames.append(mfname)
@@ -663,7 +673,7 @@ def needlet_coadd(
     if wt_out is wt:
         out_base_mask = base_mask
     else:
-        out_base_mask = enmap.project(base_mask, oshape, owcs, order=0)
+        out_base_mask = project_mask(base_mask, oshape, owcs)
 
     outmaptypes = ["coadd"] + [label + "_coadd" for label in nmap_labels]
     outmaps = {}
