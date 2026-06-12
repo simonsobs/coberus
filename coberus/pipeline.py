@@ -11,7 +11,7 @@ import psutil
 
 
 def gauss_beam(ell, fwhm):
-    """
+    r"""
     Compute Gaussian beam window function $B_\ell$ for FWHM in arcminutes.
 
     Args:
@@ -44,6 +44,35 @@ def block_smooth(imap, factor, slow=False):
     else:
         omap = enmap.upgrade(downed, factor, inclusive=True, oshape=imap.shape)
     return omap
+
+
+def band_filter(imap, fl, lmax, tol=1e-8):
+    """
+    Apply an isotropic harmonic filter with SHTs truncated to the filter's
+    effective band-limit.
+
+    Equivalent to pixell.curvedsky.filter(imap, fl, lmax=lmax) up to ~tol,
+    but much faster for low-pass filters: both SHTs run at the largest
+    multipole where the filter amplitude still exceeds tol times its peak,
+    rather than at lmax, and modes where the filter is negligible are never
+    analyzed.
+
+    Args:
+        imap: Input enmap.
+        fl: 1D harmonic filter array.
+        lmax: Maximum multipole of the untruncated filter operation.
+        tol: Relative filter amplitude below which multipoles are dropped.
+
+    Returns:
+        The filtered enmap on the input geometry.
+    """
+    fl = np.asarray(fl[: lmax + 1])
+    nz = np.where(np.abs(fl) > tol * np.abs(fl).max())[0]
+    lcut = max(int(nz[-1]), 1) if nz.size else 1
+    if lcut >= lmax:
+        return cs.filter(imap, fl, lmax=lmax)
+    alm = cs.almxfl(cs.map2alm(imap, lmax=lcut), fl[: lcut + 1])
+    return cs.alm2map(alm, enmap.empty(imap.shape, imap.wcs, imap.dtype))
 
 
 def free_mem():
@@ -122,94 +151,61 @@ def compute_tophat_beam(w_rad, lmax, w_rad_in=None, n_theta=20000):
     return filt_harm
 
 
-# Helper function for covariance smoothing
+def cov_filter(cov_smooth_type, sigma_rad, lmax, use_annulus, annulus_fwhm_ratio):
+    """
+    Build the harmonic filter used for SHT-based covariance smoothing.
+
+    Args:
+        cov_smooth_type: 'gaussian' (procedure from 2307.01043) or 'tophat'
+            (procedure from 2307.01258).
+        sigma_rad: Smoothing scale in radians.
+        lmax: Maximum multipole.
+        use_annulus: For 'tophat', whether to exclude modes below a second
+            inner filter scale.
+        annulus_fwhm_ratio: Ratio of the inner annulus scale to sigma_rad.
+
+    Returns:
+        1D harmonic filter array up to lmax.
+    """
+    if cov_smooth_type == "gaussian":
+        ells = np.arange(lmax + 1)
+        return np.exp(-0.5 * ells * (ells + 1) * sigma_rad**2)
+    w_rad_in = annulus_fwhm_ratio * sigma_rad if use_annulus else None
+    return compute_tophat_beam(sigma_rad, lmax, w_rad_in=w_rad_in)
+
+
 def cov_smooth(
-    wmap1,
-    wmap2,
-    i,
-    j,
-    cov_smooth_type,
-    cov_smooth_factor,
-    sigma_rad,
-    smooth_mean_cov,
-    fft_smooth,
-    lmax,
-    ells,
-    use_annulus,
-    annulus_fwhm_ratio,
+    wmap1, wmap2, cov_smooth_type, cov_smooth_factor, sigma_rad, fft_smooth, lmax, fl
 ):
+    """
+    Smooth the product of two wavelet maps into an empirical covariance map.
+
+    Mean subtraction (smooth_mean_cov) is handled by the caller, which passes
+    mean-subtracted delta maps in place of the raw wavelet maps; this function
+    only smooths the product.
+
+    Args:
+        wmap1: First wavelet enmap (or its mean-subtracted delta).
+        wmap2: Second wavelet enmap (or its mean-subtracted delta).
+        cov_smooth_type: 'block', 'gaussian' or 'tophat'.
+        cov_smooth_factor: Block downgrade factor for 'block' smoothing.
+        sigma_rad: Smoothing scale in radians (unused for 'block').
+        fft_smooth: For 'gaussian', smooth with FFTs instead of SHTs.
+        lmax: Maximum multipole for SHT-based smoothing.
+        fl: Harmonic filter from cov_filter; None for the block/FFT paths.
+
+    Returns:
+        The smoothed covariance enmap.
+    """
+    prod = wmap1 * wmap2
     if cov_smooth_type == "block":
-        cov = block_smooth(wmap1 * wmap2, cov_smooth_factor, slow=False)
-
-    elif cov_smooth_type == "gaussian":
-        # Applies Gaussian smoothing procedure from 2307.01043.
-
-        if smooth_mean_cov:
-            if fft_smooth:
-                wmap1_smooth = enmap.smooth_gauss(wmap1, sigma_rad)
-
-                if i == j:
-                    wmap2_smooth = wmap1_smooth
-                else:
-                    wmap2_smooth = enmap.smooth_gauss(wmap2, sigma_rad)
-
-                cov = enmap.smooth_gauss(
-                    (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
-                    sigma_rad,
-                )
-
-            else:
-                gauss_beam = np.exp(-0.5 * ells * (ells + 1) * sigma_rad**2)
-                wmap1_smooth = cs.filter(wmap1, gauss_beam, lmax=lmax)
-
-                if i == j:
-                    wmap2_smooth = wmap1_smooth
-                else:
-                    wmap2_smooth = cs.filter(wmap2, gauss_beam, lmax=lmax)
-
-                cov = cs.filter(
-                    (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
-                    gauss_beam,
-                    lmax=lmax,
-                )
-
-        else:
-            # Compute covariance without smoothing the maps. This
-            # uses only one SHT/FFT, but is less stable than the
-            # smooth_mean_cov_approach
-            if fft_smooth:
-                cov = enmap.smooth_gauss(wmap1 * wmap2, sigma_rad)
-            else:
-                cov = cs.filter((wmap1) * (wmap2), gauss_beam, lmax=lmax)
-
-    elif cov_smooth_type == "tophat":
-        # Compute beam for top-hat smoothing procedure from 2307.01258
-        w_rad = sigma_rad
-
-        if use_annulus:
-            w_rad_in = annulus_fwhm_ratio * w_rad
-        else:
-            w_rad_in = None
-
-        tophat_beam = compute_tophat_beam(w_rad, lmax, w_rad_in=w_rad_in)
-
-        if smooth_mean_cov:
-            wmap1_smooth = cs.filter(wmap1, tophat_beam, lmax=lmax)
-
-            if i == j:
-                wmap2_smooth = wmap1_smooth
-            else:
-                wmap2_smooth = cs.filter(wmap2, tophat_beam, lmax=lmax)
-
-            cov = cs.filter(
-                (wmap1 - wmap1_smooth) * (wmap2 - wmap2_smooth),
-                tophat_beam,
-                lmax=lmax,
-            )
-
-        else:
-            cov = cs.filter((wmap1) * (wmap2), tophat_beam, lmax=lmax)  # Eq. 11
-    return cov
+        return block_smooth(prod, cov_smooth_factor, slow=False)
+    if cov_smooth_type == "gaussian" and fft_smooth:
+        # Gaussian smoothing procedure from 2307.01043 using FFTs.
+        return enmap.smooth_gauss(prod, sigma_rad)
+    # SHT-based gaussian (2307.01043) or tophat (2307.01258, Eq. 11)
+    # smoothing, with the SHTs truncated to the filter's band-limit.
+    return band_filter(prod, fl, lmax)
 
 
 def needlet_coadd(
@@ -392,6 +388,10 @@ def needlet_coadd(
             f"Duplicate keys would be produced in output dictionary: {_output_keys}. "
             "Check nmap_labels for collisions with 'coadd' or 'mask'."
         )
+    # These would collide with internal wavelet_{map,mask,delta}_* file names
+    _reserved = {"map", "mask", "delta"} & set(nmap_labels)
+    if _reserved:
+        raise ValueError(f"nmap_labels uses reserved label(s): {sorted(_reserved)}")
 
     start_time = time.time()
     lmax = max(lpeaks)  # Cosine needlets have zero support beyond lpeak
@@ -613,36 +613,60 @@ def needlet_coadd(
             itags.append(tag)
         included_tags[k] = list(itags)
 
+        if cov_smooth_type == "block":
+            sigma_rad = None
+        else:
+            sigma_rad = cov_smooth_scales[k]
+
+        # Build the harmonic smoothing filter once per scale (the tophat
+        # beam in particular is expensive to compute). fl is None for the
+        # paths that do not use SHT filtering.
+        if cov_smooth_type == "block" or (cov_smooth_type == "gaussian" and fft_smooth):
+            fl = None
+        else:
+            fl = cov_filter(
+                cov_smooth_type, sigma_rad, lmax, use_annulus, annulus_fwhm_ratio
+            )
+
+        # For mean-subtracted covariances, smooth each tag's wavelet map once
+        # here rather than once per pair inside cov_smooth; smoothing the pair
+        # products of the deltas then gives the same covariance.
+        hoist = cov_smooth_type != "block" and smooth_mean_cov
+        dfnames = []
+        if hoist:
+            for tag in itags:
+                wmap = enmap.read_map(f"{out_root}wavelet_map_{tag}_scale_{k}.fits")
+                if fl is None:
+                    smap = enmap.smooth_gauss(wmap, sigma_rad)
+                else:
+                    smap = band_filter(wmap, fl, lmax)
+                dfname = f"{out_root}wavelet_delta_{tag}_scale_{k}.fits"
+                enmap.write_map(dfname, wmap - smap)
+                dfnames.append(dfname)
+        prefix = "delta" if hoist else "map"
+
         for i in range(len(itags)):
-            wmap1 = enmap.read_map(f"{out_root}wavelet_map_{itags[i]}_scale_{k}.fits")
+            wmap1 = enmap.read_map(
+                f"{out_root}wavelet_{prefix}_{itags[i]}_scale_{k}.fits"
+            )
 
             for j in range(i, len(itags)):
                 if i == j:  # Potentially minor speedup?
                     wmap2 = wmap1
                 else:
                     wmap2 = enmap.read_map(
-                        f"{out_root}wavelet_map_{itags[j]}_scale_{k}.fits"
+                        f"{out_root}wavelet_{prefix}_{itags[j]}_scale_{k}.fits"
                     )
-
-                if cov_smooth_type == "block":
-                    sigma_rad = None
-                else:
-                    sigma_rad = cov_smooth_scales[k]
 
                 cov = cov_smooth(
                     wmap1,
                     wmap2,
-                    i,
-                    j,
                     cov_smooth_type,
                     cov_smooth_factor,
                     sigma_rad,
-                    smooth_mean_cov,
                     fft_smooth,
                     lmax,
-                    ells,
-                    use_annulus,
-                    annulus_fwhm_ratio,
+                    fl,
                 )
 
                 fcovname = f"{out_root}wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits"
@@ -651,6 +675,11 @@ def needlet_coadd(
                 enmap.write_map(fcovname, cov)
                 filenames.append(fcovname)
                 totgibytes = totgibytes + (cov.nbytes / 1024 / 1024.0 / 1024.0)
+
+        # The delta maps are only needed within this scale, so free the
+        # (RAM)disk space immediately rather than at the end of the run.
+        for dfname in dfnames:
+            os.remove(dfname)
 
     elapsed_time = time.time() - start_time_covariance
     print(f"Covariance finished in {elapsed_time / 60.0:.2f} minutes.")
