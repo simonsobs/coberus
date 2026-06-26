@@ -218,6 +218,98 @@ def project_mask(imask, oshape, owcs, threshold=0.99):
         return enmap.extract(imask, oshape, owcs)
     return 1.0 * (enmap.project(imask, oshape, owcs, order=1) > threshold)
 
+
+def get_noise_realization(
+    map_fname_func,
+    ivar_fname_func,
+    tags,
+    base_tag,
+    map_coadd=None,
+    ivar_coadd=None,
+    seed=None,
+):
+    """
+    Create a noise map realization from a list of split maps by pair
+    differencing.
+
+    Args:
+        map_fname_func : func
+            Accepts the tag name and returns a path to the input split map.
+
+        ivar_fname_func : func
+            Accepts the tag name and returns a path to the input inverse
+            variance split map.
+
+        tags : list
+            Ordered list of tags for split maps.
+
+        base_tag : str
+            Name of the tag whose geometry all other tags are extracted
+            to.
+
+        seed : optional,int
+            Random seed for coeffcients of linear sum of difference maps.
+
+        map_coadd : optional,enmap
+            Inverse variance weighted coadded map. If not specified, will be
+            calculated from the map splits.
+
+        ivar_coadd : optional,enmap
+            Coadded inverse variance. If not specified, will be calculated
+            from the map splits.
+
+    Returns:
+        noise : enmap
+            The noise map realization.
+    """
+
+    shape, wcs = enmap.read_map_geometry(map_fname_func(base_tag))
+
+    assert len(tags) >= 2, "Need at least two tags"
+
+    if map_coadd is None or ivar_coadd is None:
+        # Build the inverse variance weighted coadded map from the splits if
+        # not provided
+        map_coadd = enmap.zeros(shape, wcs)
+        ivar_coadd = enmap.zeros(shape, wcs)
+
+        for i, tag in enumerate(tags):
+            map_i = enmap.read_map(map_fname_func(tag))
+            ivar_i = enmap.read_map(ivar_fname_func(tag))
+
+            if tag != base_tag:
+                map_i = enmap.extract(map_i, shape, wcs)
+                ivar_i = enmap.extract(ivar_i, shape, wcs)
+
+            map_coadd += ivar_i * map_i
+            ivar_coadd += ivar_i
+
+        mask = ivar_coadd > 0
+        map_coadd[mask] = map_coadd[mask] / ivar_coadd[mask]
+
+    rng = np.random.default_rng(seed)
+
+    noise = enmap.zeros(shape, wcs)
+
+    for i, tag in enumerate(tags):
+        map_i = enmap.read_map(map_fname_func(tag))
+        ivar_i = enmap.read_map(ivar_fname_func(tag))
+
+        if tag != base_tag:
+            map_i = enmap.extract(map_i, shape, wcs)
+            ivar_i = enmap.extract(ivar_i, shape, wcs)
+
+        diff_i = (map_i - map_coadd)
+
+        # Sign flip
+        coeff = rng.choice([-1, 1])
+        noise += coeff * ivar_i * diff_i
+
+    noise[mask] *= 1. / ivar_coadd[mask]
+
+    return noise
+
+
 def needlet_coadd(
     map_fname_func,
     mask_fname_func,
@@ -233,6 +325,7 @@ def needlet_coadd(
     oshape=None,
     owcs=None,
     deproj_response_funcs=None,
+    noise_map_fname_func=None,
     cov_smooth_type="block",
     cov_smooth_factor=64,
     ilc_bias_tol=0.01,
@@ -327,6 +420,11 @@ def needlet_coadd(
         List of response functions to deproject. Each function should accepts
         the tag name and return the map response value.
 
+    noise_map_fname_func : optional,func
+        Accepts the tag name and returns a path to the input noise map for
+        covariance calculation. If not specified, input maps will be used to
+        estimate per-pixel noise.
+
     cov_smooth_type : optional,str
         Type of smoothing to use when constructing the covariance. Current
         options are 'block', 'gaussian', and 'tophat'. Default value is 'block'.
@@ -399,7 +497,7 @@ def needlet_coadd(
             "Check nmap_labels for collisions with 'coadd' or 'mask'."
         )
     # These would collide with internal wavelet_{map,mask,delta}_* file names
-    _reserved = {"map", "mask", "delta"} & set(nmap_labels)
+    _reserved = {"map", "mask", "delta", "noise_map"} & set(nmap_labels)
     if _reserved:
         raise ValueError(f"nmap_labels uses reserved label(s): {sorted(_reserved)}")
 
@@ -574,6 +672,9 @@ def needlet_coadd(
             for label in nmap_labels
         }
 
+        if noise_map_fname_func is not None:
+             noise_wavecs = _get_wave(noise_map_fname_func, tag, mask)
+
         if i == 0:
             # Save multimap template for final coadded map
             owave = wavecs * 0.0
@@ -605,6 +706,19 @@ def needlet_coadd(
                 nfmaps[label][j].append(nwfname)
                 enmap.write_map(nwfname, nwavecs[label].maps[j])
                 totgibytes = totgibytes + (wmap.nbytes / 1024 / 1024.0 / 1024.0)
+
+        if noise_map_fname_func is not None:
+            # Loop through wavelet scales for noise maps
+            for j, wmap in enumerate(noise_wavecs.maps):
+                if j not in scales[tags[i]]:
+                    continue
+
+                wfname = f"{out_root}wavelet_noise_map_{tags[i]}_scale_{j}.fits"
+                filenames.append(wfname)
+                enmap.write_map(wfname, wmap)
+
+                totgibytes = totgibytes + (wmap.nbytes / 1024 / 1024.0 / 1024.0)
+
 
     elapsed_time = time.time() - start_time_wavelets
     print(f"Wavelets finished in {elapsed_time / 60.0:.2f} minutes.")
@@ -645,7 +759,10 @@ def needlet_coadd(
         dfnames = []
         if hoist:
             for tag in itags:
-                wmap = enmap.read_map(f"{out_root}wavelet_map_{tag}_scale_{k}.fits")
+                if noise_map_fname_func is None:
+                    wmap = enmap.read_map(f"{out_root}wavelet_map_{tag}_scale_{k}.fits")
+                else:
+                    wmap = enmap.read_map(f"{out_root}wavelet_noise_map_{tag}_scale_{k}.fits")
                 if fl is None:
                     smap = enmap.smooth_gauss(wmap, sigma_rad)
                 else:
@@ -653,7 +770,7 @@ def needlet_coadd(
                 dfname = f"{out_root}wavelet_delta_{tag}_scale_{k}.fits"
                 enmap.write_map(dfname, wmap - smap)
                 dfnames.append(dfname)
-        prefix = "delta" if hoist else "map"
+        prefix = "delta" if hoist else "map" if noise_map_fname_func is None else "noise_map"
 
         for i in range(len(itags)):
             wmap1 = enmap.read_map(
