@@ -141,6 +141,7 @@ coadd_map = result['coadd']
 - **`deproj_response_funcs`** — list of response functions for constrained ILC deprojection (e.g. tSZ removal).
 - **`cov_smooth_type`** — covariance smoothing method: `'block'` (default), `'gaussian'` ([2307.01043](https://arxiv.org/abs/2307.01043)), or `'tophat'` ([2307.01258](https://arxiv.org/abs/2307.01258)).
 - **`nmap_labels` / `nmap_label_fname_func`** — coadd additional maps (e.g. simulations) using weights derived from the data maps; results returned as `result['<label>_coadd']`.
+- **`check_cmb_weights=True`** — for a CMB solution (responses of 1), check that the per-scale ILC weights (written to `{out_root}wavelet_weights_scale_{k}_{tag}.fits`) sum to 1 in every covered pixel; raises `ValueError` otherwise.
 - **`delete_intermediate=True`** — clean up wavelet/covariance files after completion.
 
 See `examples/example_notebook.ipynb` for a complete worked example with simulated CMB maps.

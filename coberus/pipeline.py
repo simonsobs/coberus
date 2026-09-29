@@ -218,6 +218,45 @@ def project_mask(imask, oshape, owcs, threshold=0.99):
         return enmap.extract(imask, oshape, owcs)
     return 1.0 * (enmap.project(imask, oshape, owcs, order=1) > threshold)
 
+
+def check_weights_sum(weights, mask_fnames, scale, atol=1e-3):
+    """Check that ILC weights sum to 1 wherever any map contributes.
+
+    Parameters
+    ----------
+    weights : ndarray
+        ILC weights of shape (n_map, n_y, n_x) for one wavelet scale.
+    mask_fnames : list[str]
+        Paths to the wavelet-geometry masks of the maps at this scale,
+        in the same order as weights.
+    scale : int
+        Index of the wavelet scale, used for reporting.
+    atol : optional, float
+        Absolute tolerance on the deviation of the weight sum from 1.
+
+    Raises
+    ------
+    ValueError
+        If the weight sum deviates from 1 by more than atol in any pixel
+        covered by at least one mask.
+    """
+    covered = np.any([enmap.read_map(f) != 0 for f in mask_fnames], axis=0)
+    wsum = weights.sum(axis=0)[covered]
+    if wsum.size == 0:
+        print(f"Scale {scale}: no covered pixels, skipping weight check")
+        return
+    dev = np.abs(wsum - 1).max()
+    print(
+        f"Scale {scale}: weight sum over {wsum.size} covered pixels in "
+        f"[{wsum.min():.6f}, {wsum.max():.6f}], max |sum-1| = {dev:.2e}"
+    )
+    if dev > atol:
+        raise ValueError(
+            f"ILC weights at scale {scale} do not sum to 1: "
+            f"max |sum-1| = {dev:.2e} > {atol:.1e}"
+        )
+
+
 def needlet_coadd(
     map_fname_func,
     mask_fname_func,
@@ -250,6 +289,7 @@ def needlet_coadd(
     nmap_labels=None,
     nmap_label_fname_func=None,
     apply_mask=False,
+    check_cmb_weights=False,
 ):
     """
     Generic function for coadding maps using an empirical
@@ -362,24 +402,23 @@ def needlet_coadd(
         Whether to delete intermediate outputs
 
     nmap_labels : optional,list[str]
-        List of possible optional maps' labels. The special label
-        'cmb_weights' does not read any maps; instead the weights are
-        applied to wavelet maps that are 1 in all pixels, and outmaps
-        ['cmb_weights_coadd'] is a list (one per wavelet scale) of the
-        summed weights on each scale's wavelet geometry, without the
-        final wave2map. For a CMB solution (responses of 1) with no
-        deprojection this should be 1 wherever any map contributes.
+        List of possible optional maps' labels.
 
     nmap_label_fname_func : optional,func | (nmap_label, fname) -> nmap
         Optional maps not used for covariance, but coadded with
         the same weights. Accepts the optional map's label and filename
-        and returns a path. Not called for the 'cmb_weights' label.
+        and returns a path.
 
     apply_mask : optional, boolean
         If true, zero out regions of the input maps based on their masks.
         This will make the maps masked sharply before wavelet transforms,
         and is hence not recommended.
 
+    check_cmb_weights : optional, boolean
+        If true, check that at each wavelet scale the ILC weights of
+        'coadd' sum over tags to 1 in every pixel where any map
+        contributes, and raise a ValueError otherwise. This only holds
+        for a CMB solution (response_func returning 1 for every tag).
 
 
     Returns
@@ -391,8 +430,7 @@ def needlet_coadd(
           'mask'  : the final footprint mask (the base_tag mask, projected
                     onto the output geometry when one is provided).
         For each label in nmap_labels, also contains '{label}_coadd' with the
-        coadd of those maps using the same weights ('cmb_weights_coadd' is
-        instead a per-scale list; see nmap_labels).
+        coadd of those maps using the same weights.
 
     The per-scale ILC weight maps estimated for 'coadd' are also written
     to {out_root}wavelet_weights_scale_{k}_{tag}.fits for each wavelet
@@ -583,7 +621,6 @@ def needlet_coadd(
                 lambda fname: nmap_label_fname_func(label, fname), tag, mask
             )
             for label in nmap_labels
-            if label != "cmb_weights"
         }
 
         if i == 0:
@@ -612,16 +649,6 @@ def needlet_coadd(
 
             # optional maps
             for label in nmap_labels:
-                if label == "cmb_weights":
-                    # Maps of ones are identical for every tag, so write
-                    # one per scale and share it between tags.
-                    nwfname = f"{out_root}wavelet_{label}_scale_{j}.fits"
-                    if len(nfmaps[label][j]) == 0:
-                        filenames.append(nwfname)
-                        enmap.write_map(nwfname, enmap.ones(wmap.shape, wmap.wcs))
-                        totgibytes = totgibytes + (wmap.nbytes / 1024 / 1024.0 / 1024.0)
-                    nfmaps[label][j].append(nwfname)
-                    continue
                 nwfname = f"{out_root}wavelet_{label}_{tags[i]}_scale_{j}.fits"
                 filenames.append(nwfname)
                 nfmaps[label][j].append(nwfname)
@@ -774,17 +801,13 @@ def needlet_coadd(
                             fwname, enmap.enmap(weights[i], owave.maps[j].wcs)
                         )
                         filenames.append(fwname)
+                    if check_cmb_weights:
+                        check_weights_sum(weights, masks, j)
                 else:
                     result = coadd(client, coadder)
                 # This is now a numpy array
                 arr = result.compute()
                 owave.maps[j] = enmap.enmap(arr.copy(), owave.maps[j].wcs)
-
-            if outmaptype == "cmb_weights_coadd":
-                # Synthesizing constant maps is not meaningful, so keep the
-                # per-scale weight sums on the wavelet geometries.
-                outmaps[outmaptype] = [m.copy() for m in owave.maps]
-                continue
 
             coadd_map = wt_out.wave2map(owave)
             coadd_map[out_base_mask == 0] = 0

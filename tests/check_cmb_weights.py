@@ -1,5 +1,5 @@
 """
-Check the 'cmb_weights' nmap label and the per-scale weight maps written by
+Check the check_cmb_weights flag and the per-scale weight maps written by
 coberus.pipeline.needlet_coadd, using the synthetic dataset from
 tests/test_pipeline.py.
 """
@@ -15,7 +15,7 @@ from coberus.pipeline import gauss_beam, needlet_coadd
 
 
 def main():
-    """Run a block-smoothed CMB NILC with 'cmb_weights' and check outputs."""
+    """Run a block-smoothed CMB NILC with check_cmb_weights and check outputs."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-root", default="/tmp/cob_chk_")
     parser.add_argument("--debug", action="store_true", help="Low-res quick run.")
@@ -41,16 +41,9 @@ def main():
         cov_smooth_type="block",
         cov_smooth_factor=8,
         n_workers=2,
-        nmap_labels=["cmb_weights"],
+        check_cmb_weights=True,
     )
     print("keys:", sorted(out))
-    for k, w in enumerate(out["cmb_weights_coadd"]):
-        nz = w != 0
-        print(
-            f"cmb_weights_coadd scale {k}: shape {w.shape}, "
-            f"nonzero range {w[nz].min():.5f}..{w[nz].max():.5f}, "
-            f"zero fraction {1 - nz.mean():.3f}"
-        )
     for k in range(len(lpeaks)):
         files = sorted(glob.glob(f"{root}wavelet_weights_scale_{k}_*.fits"))
         ws = np.array([enmap.read_map(f) for f in files])
