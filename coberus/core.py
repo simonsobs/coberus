@@ -181,9 +181,12 @@ def coadd_maps_pixels(
     masks: np.ndarray,
     responses: np.ndarray,
     deproj_responses: np.ndarray,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Co-adds the maps in the pixel domain. Assumes all masks and maps are the same size.
+
+    Returns the coadded map (n_y, n_x) and the ILC weights (n_map, n_y, n_x)
+    applied to each map. Weights are zero for maps masked out of a pixel.
     """
 
     n_y, n_x = maps.shape[-2:]
@@ -191,6 +194,7 @@ def coadd_maps_pixels(
 
     n_deproj = len(deproj_responses)
     n_map = len(maps)
+    weights_out = np.zeros((n_map, n_y, n_x), dtype=np.float32)
 
     if n_deproj > 0:
         response_mat = (
@@ -230,6 +234,8 @@ def coadd_maps_pixels(
                 numer = np.dot(a, cinvd)
 
                 output[j, i] = numer / denom
+                # a^T C^-1 / denom, using the symmetry of C
+                weights_out[mask, j, i] = cinva / denom
 
             # Constrained ILC (see Eq. 29 & 30 of 2307.01043)
             else:
@@ -250,8 +256,9 @@ def coadd_maps_pixels(
                 a_eff = (np.dot(det_q_sub_vec, a_mix.T) / det_q).astype(np.float32)
                 weights = np.linalg.solve(cov, a_eff)
                 output[j, i] = np.dot(weights, masked_maps)
+                weights_out[mask, j, i] = weights
 
-    return output
+    return output, weights_out
 
 
 def write_to_main_array(data: np.ndarray, chunk: Chunk, main_array: da.array):
@@ -274,12 +281,13 @@ def coadded_map_wrapper(
 ) -> np.ndarray:
     """
     Wrapper for the coadd_maps_pixels function that allows you to return
-    the chunk to.
+    the chunk to. Returns (coadded map, weights, chunk).
     """
 
-    return coadd_maps_pixels(
+    output, weights = coadd_maps_pixels(
         maps, covariance_maps, masks, responses, deproj_responses
-    ), chunk
+    )
+    return output, weights, chunk
 
 
 def create_tasks_for_chunk(
@@ -308,23 +316,36 @@ def create_tasks_for_chunk(
     return coadded_map
 
 
-def coadd(client: Client, coadder: Coadder) -> da.Array:
+def coadd(client: Client, coadder: Coadder, return_weights: bool = False):
     """
     The main function for co-adding maps. Takes your Coadder object, and
     a Dask client, and returns a Dask array filled with your coadded map.
     This function uses Dask futures to coadd your maps.
+
+    If return_weights is True, also returns a Dask array of shape
+    (n_map, n_y, n_x) holding the ILC weight applied to each map in each
+    pixel (zero where a map is masked out).
     """
     chunks = coadder.chunk_task_list()
 
-    main_array = da.zeros(coadder.chunk_meta()["meta"].shape, dtype=np.float32)
+    shape = coadder.chunk_meta()["meta"].shape
+    main_array = da.zeros(shape, dtype=np.float32)
+    if return_weights:
+        weights_array = da.zeros((len(coadder.maps),) + shape, dtype=np.float32)
 
     results = [
         create_tasks_for_chunk(chunk, client, coadder, main_array) for chunk in chunks
     ]
 
     for future in dask.distributed.as_completed(results):
-        image, chunk = future.result()
+        image, weights, chunk = future.result()
 
         write_to_main_array(image, chunk, main_array)
+        if return_weights:
+            weights_array[:, chunk[0][0] : chunk[1][0], chunk[0][1] : chunk[1][1]] = (
+                weights
+            )
 
+    if return_weights:
+        return main_array, weights_array
     return main_array
