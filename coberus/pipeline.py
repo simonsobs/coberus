@@ -877,6 +877,15 @@ def needlet_coadd(
                     result = coadd(client, coadder)
                 # This is now a numpy array
                 arr = result.compute()
+                # The coadder returns zero where no mask covers a pixel.
+                # Fill those pixels with the base map's wavelet coefficients
+                # so that wave2map does not see a sharp cut, which leaks
+                # into the footprint at low ell. The final mask is applied
+                # after reconstruction.
+                if base_tag in included_tags[j]:
+                    ibase = included_tags[j].index(base_tag)
+                    covered = np.any([enmap.read_map(f) != 0 for f in masks], axis=0)
+                    arr = np.where(covered, arr, enmap.read_map(lmaps[ibase]))
                 owave.maps[j] = enmap.enmap(arr.copy(), owave.maps[j].wcs)
 
             coadd_map = wt_out.wave2map(owave)
