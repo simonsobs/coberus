@@ -529,15 +529,6 @@ def needlet_coadd(
     shape, wcs = enmap.read_map_geometry(map_fname_func(base_tag))
     n_deproj = len(deproj_response_funcs) if (deproj_response_funcs is not None) else 0
 
-    # Compute fsky from base mask. This is used to determine covariance smoothing scales
-    base_mask = enmap.read_map(mask_fname_func(base_tag))
-    fsky = (
-        (np.sum(base_mask**2) / np.prod(base_mask.shape))
-        * base_mask.area()
-        / (4 * np.pi)
-    )
-    print("fsky={:.2f}".format(fsky))
-
     # Initialize Wavelets
     uht = uharm.UHT(shape, wcs, mode="curved")
     basis = wv.CosineNeedlet(lpeaks=lpeaks)
@@ -631,7 +622,6 @@ def needlet_coadd(
                         for i in range(basis.n)
                     ]
                 )
-                * fsky
             )
             n_freq_eff = n_tag_per_scale
 
@@ -660,7 +650,6 @@ def needlet_coadd(
                         for i in range(basis.n)
                     ]
                 )
-                * fsky
             )
             n_freq_eff = n_tag_per_scale
 
