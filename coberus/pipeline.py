@@ -6,6 +6,7 @@ from dask.distributed import Client
 from contextlib import nullcontext
 import healpy as hp
 from collections import defaultdict
+from functools import partial
 import time
 import psutil
 
@@ -174,38 +175,106 @@ def cov_filter(cov_smooth_type, sigma_rad, lmax, use_annulus, annulus_fwhm_ratio
     return compute_tophat_beam(sigma_rad, lmax, w_rad_in=w_rad_in)
 
 
-def cov_smooth(
-    wmap1, wmap2, cov_smooth_type, cov_smooth_factor, sigma_rad, fft_smooth, lmax, fl
-):
+def smooth_map(imap, sigma_rad, fl, lmax):
     """
-    Smooth the product of two wavelet maps into an empirical covariance map.
-
-    Mean subtraction (smooth_mean_cov) is handled by the caller, which passes
-    mean-subtracted delta maps in place of the raw wavelet maps; this function
-    only smooths the product.
+    Smooth a map with the kernel used for 'gaussian' or 'tophat' covariance
+    smoothing.
 
     Args:
-        wmap1: First wavelet enmap (or its mean-subtracted delta).
-        wmap2: Second wavelet enmap (or its mean-subtracted delta).
-        cov_smooth_type: 'block', 'gaussian' or 'tophat'.
-        cov_smooth_factor: Block downgrade factor for 'block' smoothing.
-        sigma_rad: Smoothing scale in radians (unused for 'block').
-        fft_smooth: For 'gaussian', smooth with FFTs instead of SHTs.
+        imap: Input enmap.
+        sigma_rad: Gaussian smoothing scale in radians, used when fl is None.
+        fl: Harmonic filter from cov_filter, or None to smooth with FFTs.
         lmax: Maximum multipole for SHT-based smoothing.
-        fl: Harmonic filter from cov_filter; None for the block/FFT paths.
 
     Returns:
-        The smoothed covariance enmap.
+        The smoothed enmap.
     """
-    prod = wmap1 * wmap2
-    if cov_smooth_type == "block":
-        return block_smooth(prod, cov_smooth_factor, slow=False)
-    if cov_smooth_type == "gaussian" and fft_smooth:
+    if fl is None:
         # Gaussian smoothing procedure from 2307.01043 using FFTs.
-        return enmap.smooth_gauss(prod, sigma_rad)
+        return enmap.smooth_gauss(imap, sigma_rad)
     # SHT-based gaussian (2307.01043) or tophat (2307.01258, Eq. 11)
     # smoothing, with the SHTs truncated to the filter's band-limit.
-    return band_filter(prod, fl, lmax)
+    return band_filter(imap, fl, lmax)
+
+
+def normalized_delta(wmap, mask, smooth, ftol=1e-8):
+    """
+    Subtract the footprint-normalized local mean from a wavelet map.
+
+    The local mean is S[m w] / S[m] for smoothing operator S and binary
+    footprint m, i.e. an average over the map's own footprint only, so it
+    is not pulled towards zero near footprint edges.
+
+    Args:
+        wmap: Wavelet enmap.
+        mask: Footprint enmap of wmap; nonzero pixels are treated as 1, to
+            match the binary footprints used by coverage_covariances.
+        smooth: Function applying the smoothing operator S to an enmap.
+        ftol: Floor on S[m] to avoid dividing by zero.
+
+    Returns:
+        The mean-subtracted enmap, zeroed outside the footprint.
+    """
+    mask = (mask != 0).astype(wmap.dtype)
+    return (wmap - smooth(wmap * mask) / np.maximum(smooth(mask), ftol)) * mask
+
+
+def coverage_covariances(dfnames, mfnames, cov_fname_func, smooth, ftol=1e-8):
+    """
+    Estimate footprint-normalized covariance maps for one wavelet scale.
+
+    At each pixel p the coadd combines the set T(p) of maps whose masks
+    cover p. Every entry at p is estimated over the common footprint M_T
+    of those maps,
+
+        C_ij(p) = S[M_T d_i d_j](p) / S[M_T](p),
+
+    so all entries used together at p are averages under the same weighting.
+    This removes the low bias of S[d_i d_j] near footprint edges, and keeps
+    the per-pixel covariance positive semi-definite for a non-negative
+    smoothing kernel (unlike normalizing each pair by its own overlap).
+
+    Args:
+        dfnames: Paths to the (optionally mean-subtracted) wavelet maps d_i.
+        mfnames: Paths to the binary masks of the maps, in the same order.
+        cov_fname_func: Accepts indices (i, j) with i <= j and returns the
+            path to write covariance map C_ij to.
+        smooth: Function applying the smoothing operator S to an enmap.
+        ftol: Floor on S[M_T] to avoid dividing by zero.
+
+    Returns:
+        Symmetric nested list fcovs with fcovs[i][j] the path to C_ij.
+    """
+    n = len(dfnames)
+    code = 0
+    for i, mfname in enumerate(mfnames):
+        code = code | ((enmap.read_map(mfname) != 0).astype(np.int64) << i)
+    subsets = [int(c) for c in np.unique(code) if c != 0]
+
+    # S[M_T] is only needed on the pixels covered by exactly T
+    norms = {}
+    for t in subsets:
+        mt = enmap.enmap(((code & t) == t).astype(np.float64), code.wcs)
+        norms[t] = np.maximum(smooth(mt)[code == t], ftol)
+
+    fcovs = [[""] * n for _ in range(n)]
+    for i in range(n):
+        d1 = enmap.read_map(dfnames[i])
+        for j in range(i, n):
+            d2 = d1 if i == j else enmap.read_map(dfnames[j])
+            bits = (1 << i) | (1 << j)
+            cov = enmap.zeros(d1.shape, d1.wcs)
+            for t in subsets:
+                if t & bits != bits:
+                    continue
+                region = code == t
+                prod = d1 * d2 * ((code & t) == t)
+                cov[region] = smooth(prod)[region] / norms[t]
+            fcovname = cov_fname_func(i, j)
+            enmap.write_map(fcovname, cov)
+            fcovs[i][j] = fcovname
+            fcovs[j][i] = fcovname
+    return fcovs
 
 
 def project_mask(imask, oshape, owcs, threshold=0.99):
@@ -217,6 +286,7 @@ def project_mask(imask, oshape, owcs, threshold=0.99):
     if wcsutils.is_compatible(imask.wcs, owcs):
         return enmap.extract(imask, oshape, owcs)
     return 1.0 * (enmap.project(imask, oshape, owcs, order=1) > threshold)
+
 
 def needlet_coadd(
     map_fname_func,
@@ -347,7 +417,11 @@ def needlet_coadd(
     smooth_mean_cov: optional, boolean
         Only used for gaussian or top-hat smoothing.
         If True, computes the covariance from <(A-A_smooth)(B-B_smooth)>, as
-        in pyilc. Otherwise, computes the covariance from <AB>. Default is True.
+        in pyilc, with A_smooth the local mean of A over its own mask.
+        Otherwise, computes the covariance from <AB>. Default is True.
+        For gaussian or top-hat smoothing, the covariance at each pixel is
+        averaged only over the common mask of the maps covering that pixel
+        (see coverage_covariances), which avoids a low bias near mask edges.
 
     map_postprocess_func : optional,func
         A function to apply to each loaded map
@@ -408,15 +482,9 @@ def needlet_coadd(
     ells = np.arange(lmax)
     shape, wcs = enmap.read_map_geometry(map_fname_func(base_tag))
     n_deproj = len(deproj_response_funcs) if (deproj_response_funcs is not None) else 0
-
-    # Compute fsky from base mask. This is used to determine covariance smoothing scales
+    # Final footprint mask; replaced by the post-processed mask in the tag loop
+    # when base_tag is one of the tags
     base_mask = enmap.read_map(mask_fname_func(base_tag))
-    fsky = (
-        (np.sum(base_mask**2) / np.prod(base_mask.shape))
-        * base_mask.area()
-        / (4 * np.pi)
-    )
-    print("fsky={:.2f}".format(fsky))
 
     # Initialize Wavelets
     uht = uharm.UHT(shape, wcs, mode="curved")
@@ -504,14 +572,8 @@ def needlet_coadd(
             print(
                 f"Covariance smoothing scales not specified. Determining scales with ILC bias tolerance of {ilc_bias_tol}"
             )
-            n_modes_eff = (
-                np.asarray(
-                    [
-                        np.sum((2 * ells + 1) * basis(i, ells) ** 2)
-                        for i in range(basis.n)
-                    ]
-                )
-                * fsky
+            n_modes_eff = np.asarray(
+                [np.sum((2 * ells + 1) * basis(i, ells) ** 2) for i in range(basis.n)]
             )
             n_freq_eff = n_tag_per_scale
 
@@ -533,14 +595,8 @@ def needlet_coadd(
             # n_modes_eff = np.asarray([np.sum((2*ells+1)*np.where(basis(i, ells) !=0 , 1, 0))
             #                         for i in range(basis.n)])
 
-            n_modes_eff = (
-                np.asarray(
-                    [
-                        np.sum((2 * ells + 1) * basis(i, ells) ** 2)
-                        for i in range(basis.n)
-                    ]
-                )
-                * fsky
+            n_modes_eff = np.asarray(
+                [np.sum((2 * ells + 1) * basis(i, ells) ** 2) for i in range(basis.n)]
             )
             n_freq_eff = n_tag_per_scale
 
@@ -638,58 +694,57 @@ def needlet_coadd(
                 cov_smooth_type, sigma_rad, lmax, use_annulus, annulus_fwhm_ratio
             )
 
-        # For mean-subtracted covariances, smooth each tag's wavelet map once
-        # here rather than once per pair inside cov_smooth; smoothing the pair
-        # products of the deltas then gives the same covariance.
-        hoist = cov_smooth_type != "block" and smooth_mean_cov
-        dfnames = []
-        if hoist:
-            for tag in itags:
-                wmap = enmap.read_map(f"{out_root}wavelet_map_{tag}_scale_{k}.fits")
-                if fl is None:
-                    smap = enmap.smooth_gauss(wmap, sigma_rad)
-                else:
-                    smap = band_filter(wmap, fl, lmax)
-                dfname = f"{out_root}wavelet_delta_{tag}_scale_{k}.fits"
-                enmap.write_map(dfname, wmap - smap)
-                dfnames.append(dfname)
-        prefix = "delta" if hoist else "map"
+        def _cov_fname(i, j, k=k, itags=itags):
+            return f"{out_root}wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits"
 
-        for i in range(len(itags)):
-            wmap1 = enmap.read_map(
-                f"{out_root}wavelet_{prefix}_{itags[i]}_scale_{k}.fits"
+        if cov_smooth_type == "block":
+            for i in range(len(itags)):
+                wmap1 = enmap.read_map(fmaps[k][i])
+
+                for j in range(i, len(itags)):
+                    if i == j:  # Potentially minor speedup?
+                        wmap2 = wmap1
+                    else:
+                        wmap2 = enmap.read_map(fmaps[k][j])
+
+                    cov = block_smooth(wmap1 * wmap2, cov_smooth_factor, slow=False)
+
+                    fcovname = _cov_fname(i, j)
+                    fcovs[k][i][j] = fcovname
+                    fcovs[k][j][i] = fcovname
+                    enmap.write_map(fcovname, cov)
+        else:
+            smooth = partial(smooth_map, sigma_rad=sigma_rad, fl=fl, lmax=lmax)
+
+            # Mean-subtract each tag's wavelet map once here rather than
+            # once per pair; smoothing the pair products of the deltas then
+            # gives the same covariance.
+            dfnames = []
+            if smooth_mean_cov:
+                for tag, wfname, mfname in zip(itags, fmaps[k], fmasks[k]):
+                    delta = normalized_delta(
+                        enmap.read_map(wfname), enmap.read_map(mfname), smooth
+                    )
+                    dfname = f"{out_root}wavelet_delta_{tag}_scale_{k}.fits"
+                    enmap.write_map(dfname, delta)
+                    dfnames.append(dfname)
+
+            fcovs[k] = coverage_covariances(
+                dfnames if smooth_mean_cov else fmaps[k],
+                fmasks[k],
+                _cov_fname,
+                smooth,
             )
 
+            # The delta maps are only needed within this scale, so free the
+            # (RAM)disk space immediately rather than at the end of the run.
+            for dfname in dfnames:
+                os.remove(dfname)
+
+        for i in range(len(itags)):
             for j in range(i, len(itags)):
-                if i == j:  # Potentially minor speedup?
-                    wmap2 = wmap1
-                else:
-                    wmap2 = enmap.read_map(
-                        f"{out_root}wavelet_{prefix}_{itags[j]}_scale_{k}.fits"
-                    )
-
-                cov = cov_smooth(
-                    wmap1,
-                    wmap2,
-                    cov_smooth_type,
-                    cov_smooth_factor,
-                    sigma_rad,
-                    fft_smooth,
-                    lmax,
-                    fl,
-                )
-
-                fcovname = f"{out_root}wavelet_cov_scale_{k}_{itags[i]}_{itags[j]}.fits"
-                fcovs[k][i][j] = fcovname
-                fcovs[k][j][i] = fcovname
-                enmap.write_map(fcovname, cov)
-                filenames.append(fcovname)
-                totgibytes = totgibytes + (cov.nbytes / 1024 / 1024.0 / 1024.0)
-
-        # The delta maps are only needed within this scale, so free the
-        # (RAM)disk space immediately rather than at the end of the run.
-        for dfname in dfnames:
-            os.remove(dfname)
+                filenames.append(fcovs[k][i][j])
+                totgibytes = totgibytes + os.path.getsize(fcovs[k][i][j]) / 1024**3
 
     elapsed_time = time.time() - start_time_covariance
     print(f"Covariance finished in {elapsed_time / 60.0:.2f} minutes.")
