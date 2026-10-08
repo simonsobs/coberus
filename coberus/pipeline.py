@@ -320,6 +320,7 @@ def needlet_coadd(
     nmap_labels=None,
     nmap_label_fname_func=None,
     apply_mask=False,
+    alm_input=False,
 ):
     """
     Generic function for coadding maps using an empirical
@@ -448,6 +449,16 @@ def needlet_coadd(
         This will make the maps masked sharply before wavelet transforms,
         and is hence not recommended.
 
+    alm_input : optional, boolean
+        If true, map_fname_func and nmap_label_fname_func return paths to
+        alm files (readable by healpy.read_alm) instead of maps, for example
+        the alms of the masked and apodized input maps. This skips the
+        map-to-alm transform of each input. The alms must extend at least to
+        max(lpeaks). The wavelet geometry is then taken from the base_tag
+        mask. Cannot be combined with map_postprocess_func or apply_mask,
+        which act on maps. Requires a pixell version with
+        WaveletTransform.harm2wave.
+
 
 
     Returns
@@ -480,7 +491,12 @@ def needlet_coadd(
     start_time = time.time()
     lmax = max(lpeaks)  # Cosine needlets have zero support beyond lpeak
     ells = np.arange(lmax)
-    shape, wcs = enmap.read_map_geometry(map_fname_func(base_tag))
+    if alm_input and (map_postprocess_func is not None or apply_mask):
+        raise ValueError(
+            "alm_input cannot be used with map_postprocess_func or apply_mask"
+        )
+    geometry_fname_func = mask_fname_func if alm_input else map_fname_func
+    shape, wcs = enmap.read_map_geometry(geometry_fname_func(base_tag))
     n_deproj = len(deproj_response_funcs) if (deproj_response_funcs is not None) else 0
     # Final footprint mask; replaced by the post-processed mask in the tag loop
     # when base_tag is one of the tags
@@ -492,6 +508,8 @@ def needlet_coadd(
     scales = get_scales(basis, tags, lmins, lmaxs)
     nwaves = basis.n
     wt = wv.WaveletTransform(uht, basis=basis)
+    if alm_input and not hasattr(wt, "harm2wave"):
+        raise ImportError("alm_input needs a pixell with WaveletTransform.harm2wave")
 
     # Optional separate output geometry (e.g. a downgrade of base_tag). Only
     # the final wave2map reconstruction uses this; per-scale wavelet
@@ -512,6 +530,14 @@ def needlet_coadd(
     do_nmaps = len(nmap_labels) > 0 and (nmap_label_fname_func is not None)
 
     def _get_wave(fname_func, itag, imask):
+        if alm_input:
+            alm = hp.read_alm(fname_func(itag))
+            if cs.nalm2lmax(alm.shape[-1]) < lmax:
+                raise ValueError(f"alms of {itag} do not reach max(lpeaks) = {lmax}")
+            beam_ratio = gauss_beam(ells, out_beam_fwhm) / beam_func(itag, ells)
+            return wt.harm2wave(
+                alm, fl=beam_ratio, scales=scales[itag], fill_value=np.nan
+            )
         gmap = enmap.read_map(fname_func(itag))
 
         if map_postprocess_func is not None:
