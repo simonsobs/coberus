@@ -457,7 +457,7 @@ def needlet_coadd(
         max(lpeaks). The wavelet geometry is then taken from the base_tag
         mask. Cannot be combined with map_postprocess_func or apply_mask,
         which act on maps. Requires a pixell version with
-        WaveletTransform.alm2wave.
+        WaveletTransform.harm2wave.
 
 
 
@@ -508,8 +508,8 @@ def needlet_coadd(
     scales = get_scales(basis, tags, lmins, lmaxs)
     nwaves = basis.n
     wt = wv.WaveletTransform(uht, basis=basis)
-    if alm_input and not hasattr(wt, "alm2wave"):
-        raise ImportError("alm_input needs a pixell with WaveletTransform.alm2wave")
+    if alm_input and not hasattr(wt, "harm2wave"):
+        raise ImportError("alm_input needs a pixell with WaveletTransform.harm2wave")
 
     # Optional separate output geometry (e.g. a downgrade of base_tag). Only
     # the final wave2map reconstruction uses this; per-scale wavelet
@@ -535,7 +535,7 @@ def needlet_coadd(
             if cs.nalm2lmax(alm.shape[-1]) < lmax:
                 raise ValueError(f"alms of {itag} do not reach max(lpeaks) = {lmax}")
             beam_ratio = gauss_beam(ells, out_beam_fwhm) / beam_func(itag, ells)
-            return wt.alm2wave(
+            return wt.harm2wave(
                 alm, fl=beam_ratio, scales=scales[itag], fill_value=np.nan
             )
         gmap = enmap.read_map(fname_func(itag))
